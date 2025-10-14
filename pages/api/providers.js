@@ -12,7 +12,6 @@ export default async function handler(req, res){
 
     if (!providers.length) return res.json({ origin, results: [] });
 
-    // matriz en lotes
     const batchSize = 24;
     const scored = [];
     for (let i=0; i<providers.length; i+=batchSize){
@@ -29,10 +28,10 @@ export default async function handler(req, res){
       campañas: r.campañas, tipoProveedor: r.tipoProveedor, profesion: r.profesion,
       especialidad: r.especialidad, subEspecialidad: r.subEspecialidad,
       telefono: r.telefono, email: r.email,
-      // métricas
+      lat: r.lat,               // ← añadido
+      lng: r.lng,               // ← añadido
       distance_km: km(r.distance_m),
       duration_min: min(r.duration_s),
-      // urls
       mapPlaceUrl: `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lng}`,
       mapDirUrl:   `https://www.google.com/maps/dir/?api=1&destination=${r.lat},${r.lng}`
     }));
