@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
-// formato de tiempo: <60 => "XX min", >=60 => "H hr(s) M min"
 function fmtMinutes(total){
   const m = Math.max(0, Math.round(total||0));
   if (m < 60) return `${m} min`;
@@ -23,11 +22,12 @@ export default function Home(){
   const [origin, setOrigin] = useState(null);
   const [error, setError] = useState("");
 
-  // Mapbox (cargamos mapbox-gl SOLO en cliente)
+  // MAPA
   const mapRef = useRef(null);
   const mapboxRef = useRef(null);
   const markersRef = useRef([]);
 
+  // Facets
   useEffect(() => {
     (async () => {
       try{
@@ -36,13 +36,15 @@ export default function Home(){
       }catch(_){}
     })();
   }, []);
-
-  // chips campañas: si facets trae campañas, usamos esas; si no, fallback
   const campaignOptions = facets.campaigns?.length ? facets.campaigns : ["Liverpool","Mutuus","MetLife"];
 
   function resetFilters(){
-    setCampaigns([]); setType(""); setProfession(""); setSpecialty(""); setSubSpecialty("");
+    setAddress(""); setCampaigns([]);
+    setType(""); setProfession(""); setSpecialty(""); setSubSpecialty("");
     setResults([]); setOrigin(null); setError("");
+    // limpia pines si ya hay mapa
+    markersRef.current.forEach(m => m.remove());
+    markersRef.current = [];
   }
 
   const search = async () => {
@@ -75,7 +77,7 @@ export default function Home(){
     return groups;
   }, [results]);
 
-  // descripción “inteligente” (oculta “Sin …” según reglas)
+  // descripción
   function describe(r){
     const tipo = r.tipoProveedor?.trim();
     const prof = r.profesion?.trim();
@@ -83,19 +85,13 @@ export default function Home(){
     const sub  = r.subEspecialidad?.trim();
     const isEmpty = s => !s || /^sin\s/i.test(s);
 
-    if (/primer contacto/i.test(tipo)){
-      return prof || tipo || "";
-    }
-    if (/sub/i.test(tipo)){
-      return [prof, isEmpty(esp) ? "" : esp, isEmpty(sub) ? "" : sub].filter(Boolean).join(" | ");
-    }
-    if (/especialista/i.test(tipo)){
-      return [prof, isEmpty(esp) ? "" : esp].filter(Boolean).join(" | ");
-    }
+    if (/primer contacto/i.test(tipo)) return prof || tipo || "";
+    if (/sub/i.test(tipo)) return [prof, isEmpty(esp)?"" : esp, isEmpty(sub)?"" : sub].filter(Boolean).join(" | ");
+    if (/especialista/i.test(tipo)) return [prof, isEmpty(esp)?"" : esp].filter(Boolean).join(" | ");
     return [tipo, prof, esp, sub].filter(Boolean).join(" | ");
   }
 
-  // MAPA: inicializa y pinta pines
+  // MAPA: inicializa y pinta pines (contenidos dentro del contenedor, sin superponerse)
   useEffect(() => {
     if (!origin && results.length === 0) return;
     (async () => {
@@ -112,14 +108,13 @@ export default function Home(){
         });
         mapRef.current.addControl(new mapboxgl.NavigationControl({ showCompass:false }), "top-right");
       }
-      // limpia pines anteriores
+      // limpia pines
       markersRef.current.forEach(m => m.remove());
       markersRef.current = [];
 
       const map = mapRef.current;
       const mbx = mapboxRef.current;
 
-      // pin origen
       if (origin){
         const m = new mbx.Marker({ color:"#1d4ed8" })
           .setLngLat([origin.lng, origin.lat])
@@ -128,10 +123,10 @@ export default function Home(){
         markersRef.current.push(m);
         map.setCenter([origin.lng, origin.lat]);
       }
-      // pines proveedores
       for (const r of results){
+        if (!Number.isFinite(r.lat) || !Number.isFinite(r.lng)) continue;
         const m = new mbx.Marker({ color:"#059669" })
-          .setLngLat([Number(r.mapPlaceUrl.split("query=")[1].split(",")[1]), Number(r.mapPlaceUrl.split("query=")[1].split(",")[0])]) // usa lat/lng en URL
+          .setLngLat([r.lng, r.lat])
           .setPopup(new mbx.Popup().setHTML(`<strong>${r.nombre}</strong><br>${r.especialidad||""}<br>${fmtMinutes(r.duration_min)} · ${r.distance_km} km`))
           .addTo(map);
         markersRef.current.push(m);
@@ -139,10 +134,9 @@ export default function Home(){
     })();
   }, [origin, results]);
 
-  // visibilidad de selects dependientes
-  const showProfession    = true; // siempre visible es útil
-  const showSpecialty     = /especialista|sub/i.test(type);
-  const showSubSpecialty  = /sub/i.test(type);
+  // visibilidad: ahora SIEMPRE se muestran, pero se deshabilitan si no aplican
+  const disabledSpecialty    = !( /especialista|sub/i.test(type) );
+  const disabledSubSpecialty = !( /sub/i.test(type) );
 
   return (
     <main style={{fontFamily:"system-ui", padding:20, maxWidth:1300, margin:"0 auto"}}>
@@ -157,7 +151,6 @@ export default function Home(){
           style={{width:"100%", padding:12, borderRadius:10, border:"1px solid #ddd", marginTop:6}}
         />
 
-        {/* filtros dependientes */}
         <div style={{display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:10, marginTop:12}}>
           <div>
             <label style={{fontSize:12}}>Tipo de proveedor</label>
@@ -168,38 +161,34 @@ export default function Home(){
             </select>
           </div>
 
-          {showProfession && (
-            <div>
-              <label style={{fontSize:12}}>Profesión</label>
-              <select value={profession} onChange={e=> setProfession(e.target.value)}
-                style={{width:"100%", padding:10, borderRadius:10, border:"1px solid #ddd"}}>
-                <option value="">(Todas)</option>
-                {facets.professions.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-          )}
+          <div>
+            <label style={{fontSize:12}}>Profesión</label>
+            <select value={profession} onChange={e=> setProfession(e.target.value)}
+              style={{width:"100%", padding:10, borderRadius:10, border:"1px solid #ddd"}}>
+              <option value="">(Todas)</option>
+              {facets.professions.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
 
-          {showSpecialty && (
-            <div>
-              <label style={{fontSize:12}}>Especialidad</label>
-              <select value={specialty} onChange={e=> setSpecialty(e.target.value)}
-                style={{width:"100%", padding:10, borderRadius:10, border:"1px solid #ddd"}}>
-                <option value="">(Todas)</option>
-                {facets.specialties.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          )}
+          <div>
+            <label style={{fontSize:12}}>Especialidad</label>
+            <select value={specialty} onChange={e=> setSpecialty(e.target.value)}
+              disabled={disabledSpecialty}
+              style={{width:"100%", padding:10, borderRadius:10, border:"1px solid #ddd", background: disabledSpecialty ? "#f3f4f6" : "#fff"}}>
+              <option value="">{disabledSpecialty ? "(Seleccione Especialista/Sub)" : "(Todas)"}</option>
+              {facets.specialties.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
 
-          {showSubSpecialty && (
-            <div>
-              <label style={{fontSize:12}}>Sub-especialidad</label>
-              <select value={subSpecialty} onChange={e=> setSubSpecialty(e.target.value)}
-                style={{width:"100%", padding:10, borderRadius:10, border:"1px solid #ddd"}}>
-                <option value="">(Todas)</option>
-                {facets.subSpecialties.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          )}
+          <div>
+            <label style={{fontSize:12}}>Sub-especialidad</label>
+            <select value={subSpecialty} onChange={e=> setSubSpecialty(e.target.value)}
+              disabled={disabledSubSpecialty}
+              style={{width:"100%", padding:10, borderRadius:10, border:"1px solid #ddd", background: disabledSubSpecialty ? "#f3f4f6" : "#fff"}}>
+              <option value="">{disabledSubSpecialty ? "(Seleccione Sub especialista)" : "(Todas)"}</option>
+              {facets.subSpecialties.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
         </div>
 
         {/* campañas */}
@@ -230,10 +219,9 @@ export default function Home(){
 
       {error && <div style={{marginTop:10, background:"#FEF3C7", padding:10, borderRadius:10, border:"1px solid #FDE68A"}}>{error}</div>}
 
-      {/* layout resultados + mapa */}
+      {/* layout resultados + mapa (con z-index/overflow para que NO se superponga) */}
       <div style={{display:"grid", gridTemplateColumns:"1.1fr 0.9fr", gap:16, marginTop:16}}>
-        {/* LISTA agrupada */}
-        <div>
+        <div style={{position:"relative", zIndex:2}}>
           {Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'es')).map(spec => (
             <div key={spec} style={{marginBottom:14}}>
               <div style={{fontWeight:700, color:"#0f766e", margin:"6px 0"}}>{spec}</div>
@@ -242,7 +230,6 @@ export default function Home(){
                   <li key={r.id} style={{background:"#fff", padding:14, borderRadius:12, boxShadow:"0 2px 12px rgba(0,0,0,.06)"}}>
                     <div style={{display:"flex", justifyContent:"space-between", gap:16}}>
                       <div style={{display:"flex", gap:10}}>
-                        {/* Icono por tipo */}
                         <div style={{fontSize:20, lineHeight:"24px", color:/primer contacto/i.test(r.tipoProveedor)?'#16a34a':(/sub/i.test(r.tipoProveedor)?'#7c3aed':'#0ea5e9')}}>
                           { /primer contacto/i.test(r.tipoProveedor) ? '✚' : (/sub/i.test(r.tipoProveedor) ? '🧬' : '⚕') }
                         </div>
@@ -272,8 +259,9 @@ export default function Home(){
           ))}
         </div>
 
-        {/* MAPA */}
-        <div id="hexalud-map" style={{width:"100%", height:600, background:"#f3f4f6", borderRadius:12}} />
+        <div style={{position:"relative", zIndex:1}}>
+          <div id="hexalud-map" style={{width:"100%", height:600, background:"#f3f4f6", borderRadius:12, overflow:"hidden"}} />
+        </div>
       </div>
     </main>
   );
