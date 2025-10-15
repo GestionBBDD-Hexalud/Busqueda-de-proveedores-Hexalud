@@ -1,3 +1,21 @@
+function buildFacetsFromResults(results) {
+  const setType = new Set(), setProf = new Set(), setSpec = new Set(), setSub = new Set(), setCamp = new Set();
+  for (const r of results || []) {
+    if (r.tipoProveedor) setType.add(r.tipoProveedor);
+    if (r.profesion) setProf.add(r.profesion);
+    if (r.especialidad) setSpec.add(r.especialidad);
+    if (r.subEspecialidad) setSub.add(r.subEspecialidad);
+    (r.campañas || []).forEach((c) => c && setCamp.add(c));
+  }
+  const sort = (a) => [...a].filter(Boolean).sort((x, y) => x.localeCompare(y, "es"));
+  return {
+    types: sort(setType),
+    professions: sort(setProf),
+    specialties: sort(setSpec),
+    subSpecialties: sort(setSub),
+    campaigns: sort(setCamp),
+  };
+}
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
