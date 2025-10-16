@@ -19,7 +19,7 @@ function fmtMinutes(total) {
 }
 
 function describeLine(r) {
-  // Puedes adaptar estos nombres si tu API ya devuelve los normalizados:
+  // Acepta los nombres normalizados y/o los originales de Airtable
   const tipo = (r.tipoProveedor || r["Tipo de proveedor"] || "").trim();
   const prof = (r.profesion || r["Profesión"] || "").trim();
   const esp  = (r.especialidad || r["Especialidad"] || "").trim();
@@ -36,8 +36,8 @@ function describeLine(r) {
 
 async function copyFicha(r) {
   const txt = [
-    r.Nombre || "(Sin nombre)",
-    `${r.direccion || r.Dirección || ""} · ${r.municipio || ""}, ${r.estado || ""}`.replace(/^ · , $/,""),
+    r["Nombre de proveedor"] || "(Sin nombre)",
+    `${r.direccion || r.Dirección || ""} · ${r.municipio || ""}${r.estado ? `, ${r.estado}` : ""}`,
     describeLine(r),
     `${fmtMinutes(r.duration_min)} · ${r.distance_km} km`,
     r.telefono ? `Tel: ${r.telefono}` : ""
@@ -106,6 +106,7 @@ export default function Home() {
 
   // Autocomplete
   const [suggestions, setSuggestions] = useState([]);
+  the
   const [showSuggest, setShowSuggest] = useState(false);
   const suggestTimeout = useRef(null);
 
@@ -295,17 +296,18 @@ export default function Home() {
         map.setCenter([origin.lng, origin.lat]);
       }
 
-      // Proveedores (🏥) + **POPUP usando r.Nombre**
+      // Proveedores (🏥) + **POPUP usando Nombre de proveedor**
       for (const r of results.slice(0, 100)) {
-        if (!Number.isFinite(r.lat) || !Number.isFinite(r.lng)) continue;
+        const lng = parseFloat(r.lng), lat = parseFloat(r.lat);
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
         const el = document.createElement("div");
         el.style.fontSize = "20px";
         el.textContent = "🏥";
         const m = new mbx.Marker({ element: el })
-          .setLngLat([r.lng, r.lat])
+          .setLngLat([lng, lat])
           .setPopup(
             new mbx.Popup().setHTML(
-              `<strong>${r.Nombre || "(Sin nombre)"}</strong><br>${describeLine(r)}<br>${fmtMinutes(r.duration_min)} · ${r.distance_km} km`
+              `<strong>${r["Nombre de proveedor"] || "(Sin nombre)"}</strong><br>${describeLine(r)}<br>${fmtMinutes(r.duration_min)} · ${r.distance_km} km`
             )
           )
           .addTo(map);
@@ -314,46 +316,58 @@ export default function Home() {
     })();
   }, [showMap, origin, results]);
 
-  // Dibuja una línea simple origen→destino
+  // Dibuja la RUTA REAL con Mapbox Directions (origen → destino)
   async function drawRouteTo(r) {
     if (!showMap) setShowMap(true);
     setActiveId(r.id);
 
     const map = mapRef.current;
     const mbx = mapboxRef.current;
-    if (!map || !mbx || !origin || !Number.isFinite(r.lat) || !Number.isFinite(r.lng)) return;
+    if (!map || !mbx || !origin) return;
 
-    const geojson = {
-      type: "FeatureCollection",
-      features: [{
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: [
-            [origin.lng, origin.lat],
-            [r.lng, r.lat]
-          ]
-        }
-      }]
+    const dest = {
+      lng: parseFloat(r.lng),
+      lat: parseFloat(r.lat),
     };
+    if (!Number.isFinite(dest.lng) || !Number.isFinite(dest.lat)) return;
 
-    if (map.getSource(routeSrcId.current)) {
-      if (map.getLayer(routeLayerId.current)) map.removeLayer(routeLayerId.current);
-      map.removeSource(routeSrcId.current);
+    try {
+      const { data } = await axios.get(
+        `https://api.mapbox.com/directions/v5/mapbox/driving/${origin.lng},${origin.lat};${dest.lng},${dest.lat}`,
+        { params: { geometries: "geojson", overview: "full", access_token: mbx.accessToken } }
+      );
+
+      const route = data?.routes?.[0];
+      if (!route?.geometry) return;
+
+      const geojson = {
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          geometry: route.geometry,
+          properties: {}
+        }]
+      };
+
+      if (map.getSource(routeSrcId.current)) {
+        if (map.getLayer(routeLayerId.current)) map.removeLayer(routeLayerId.current);
+        map.removeSource(routeSrcId.current);
+      }
+
+      map.addSource(routeSrcId.current, { type: "geojson", data: geojson });
+      map.addLayer({
+        id: routeLayerId.current,
+        type: "line",
+        source: routeSrcId.current,
+        paint: { "line-width": 5, "line-color": "#0ea5e9" }
+      });
+
+      const bounds = new mbx.LngLatBounds();
+      (route.geometry.coordinates || []).forEach(([lng, lat]) => bounds.extend([lng, lat]));
+      map.fitBounds(bounds, { padding: 60, maxZoom: 14, duration: 600 });
+    } catch (e) {
+      console.error("Directions error", e);
     }
-
-    map.addSource(routeSrcId.current, { type: "geojson", data: geojson });
-    map.addLayer({
-      id: routeLayerId.current,
-      type: "line",
-      source: routeSrcId.current,
-      paint: { "line-width": 4, "line-color": "#0ea5e9" }
-    });
-
-    const bounds = new mbx.LngLatBounds();
-    bounds.extend([origin.lng, origin.lat]);
-    bounds.extend([r.lng, r.lat]);
-    map.fitBounds(bounds, { padding: 60, maxZoom: 14, duration: 600 });
   }
 
   return (
@@ -521,7 +535,7 @@ export default function Home() {
                               { /primer contacto/i.test(r.tipoProveedor || r["Tipo de proveedor"]) ? "✚" : (/(sub|Sub)/i.test(r.tipoProveedor || r["Tipo de proveedor"]) ? "🧬" : "⚕") }
                             </div>
                             <div>
-                              <div style={{ fontWeight: 600 }}>{r.Nombre || "(Sin nombre)"}</div>
+                              <div style={{ fontWeight: 600 }}>{r["Nombre de proveedor"] || "(Sin nombre)"}</div>
                               <div style={{ fontSize: 14, color: "#555" }}>
                                 {(r.direccion || r.Dirección || "")} · {(r.municipio || "")}{(r.estado ? `, ${r.estado}` : "")}
                               </div>
@@ -583,7 +597,7 @@ export default function Home() {
                               { /primer contacto/i.test(r.tipoProveedor || r["Tipo de proveedor"]) ? "✚" : (/(sub|Sub)/i.test(r.tipoProveedor || r["Tipo de proveedor"]) ? "🧬" : "⚕") }
                             </div>
                             <div>
-                              <div style={{ fontWeight: 600 }}>{r.Nombre || "(Sin nombre)"}</div>
+                              <div style={{ fontWeight: 600 }}>{r["Nombre de proveedor"] || "(Sin nombre)"}</div>
                               <div style={{ fontSize: 14, color: "#555" }}>
                                 {(r.direccion || r.Dirección || "")} · {(r.municipio || "")}{(r.estado ? `, ${r.estado}` : "")}
                               </div>
@@ -638,7 +652,7 @@ export default function Home() {
               if (!r) return null;
               return (
                 <div style={{ marginBottom: 8, background: "#fff", padding: 10, borderRadius: 10, border: "1px solid #eee" }}>
-                  <strong>Ruta seleccionada:</strong> {r.Nombre || "(Sin nombre)"} · {fmtMinutes(r.duration_min)} · {r.distance_km} km
+                  <strong>Ruta seleccionada:</strong> {r["Nombre de proveedor"] || "(Sin nombre)"} · {fmtMinutes(r.duration_min)} · {r.distance_km} km
                 </div>
               );
             })()}
