@@ -1,43 +1,160 @@
-import { listProviders } from "../../lib/airtable";
-import { geocodeAddress, getMatrix, km, min } from "../../lib/geo";
+// /pages/api/providers.js
+import Airtable from "airtable";
+import axios from "axios";
 
-export default async function handler(req, res){
-  try{
-    const { address, campaigns, type, profession, specialty, subSpecialty } = req.query;
-    if (!address) return res.status(400).json({ error: "Falta parámetro 'address'" });
+const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, MAPBOX_TOKEN } = process.env;
 
-    const campaignsArr = campaigns ? campaigns.split(",").map(s=>s.trim()).filter(Boolean) : [];
+const base = new Airtable({ apiKey: AIRTABLE_API_KEY }).base(AIRTABLE_BASE_ID);
+
+/* -------- Normalización de campañas --------
+   Une variantes y elimina duplicados */
+function normalizeCampaigns(list) {
+  const map = new Map([
+    ["liverpool", "Liverpool"],
+    ["metlife", "MetLife"],
+    ["mutuus", "Mutuus"],
+    ["mutus", "Mutuus"], // <- corrige el origen "mutus"
+  ]);
+  const out = [];
+  (list || []).forEach((x) => {
+    const k = String(x || "").trim().toLowerCase();
+    if (!k) return;
+    out.push(map.get(k) || x);
+  });
+  return [...new Set(out)];
+}
+
+function mapRecord(rec) {
+  const f = rec.fields || {};
+  return {
+    id: rec.id,
+
+    // << nombre corregido a tu campo real
+    "Nombre de proveedor": f["Nombre de proveedor"] || f["Nombre"] || null,
+
+    direccion: f["Dirección"] || f["Direcciones de Consultorios"] || f["direccion"] || "",
+    municipio: f["Ciudad o municipio"] || f["municipio"] || "",
+    estado:    f["Estado"] || f["estado"] || "",
+    telefono:  f["Teléfono"] || f["telefono"] || "",
+
+    tipoProveedor:   f["Tipo de proveedor"] || "",
+    profesion:       f["Profesión"] || "",
+    especialidad:    f["Especialidad"] || "",
+    subEspecialidad: f["Sub. Especialidad"] || f["Sub-especialidad"] || "",
+
+    campañas: normalizeCampaigns(f["Campañas"] || f["campañas"] || []),
+
+    lat: Number(f["Lat"]) || null,
+    lng: Number(f["Lng"]) || null,
+
+    distance_km: null,
+    duration_min: null,
+  };
+}
+
+async function geocodeAddress(address) {
+  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json`;
+  const { data } = await axios.get(url, {
+    params: { access_token: MAPBOX_TOKEN, language: "es", country: "mx", limit: 1 },
+  });
+  const feat = data?.features?.[0];
+  const [lng, lat] = feat?.center || [];
+  return (Number.isFinite(lat) && Number.isFinite(lng)) ? { lat, lng } : null;
+}
+
+/* Matriz de tiempos/distancias: origen -> destinos */
+async function drivingMatrix(orig, dests) {
+  const coords = [[orig.lng, orig.lat], ...dests.map(d => [d.lng, d.lat])]
+    .map(([x, y]) => `${x},${y}`).join(";");
+
+  const url = `https://api.mapbox.com/directions-matrix/v1/mapbox/driving/${coords}`;
+  const { data } = await axios.get(url, {
+    params: { access_token: MAPBOX_TOKEN, annotations: "distance,duration" }
+  });
+
+  const durations = (data?.durations?.[0] || []).slice(1);
+  const distances = (data?.distances?.[0] || []).slice(1);
+
+  return dests.map((d, i) => ({
+    id: d.id,
+    duration_min: Math.round((durations[i] || 0) / 60),
+    distance_km: Number(((distances[i] || 0) / 1000).toFixed(1)),
+  }));
+}
+
+export default async function handler(req, res) {
+  try {
+    const {
+      address = "",
+      type = "",
+      profession = "",
+      specialty = "",
+      subSpecialty = "",
+      campaigns = "",
+      limit = 50,
+    } = req.query;
+
+    if (!address) return res.status(400).json({ error: "address requerido" });
+
+    // 1) Geocodifica origen
     const origin = await geocodeAddress(address);
-    const providers = await listProviders({ campaigns: campaignsArr, type, profession, specialty, subSpecialty });
+    if (!origin) return res.status(400).json({ error: "Dirección no encontrada" });
 
-    if (!providers.length) return res.json({ origin, results: [] });
+    // 2) Lee Airtable
+    const all = [];
+    await base(AIRTABLE_TABLE_NAME)
+      .select({
+        fields: [
+          "Nombre de proveedor", "Nombre",
+          "Dirección", "Direcciones de Consultorios",
+          "Ciudad o municipio", "Estado", "Teléfono",
+          "Tipo de proveedor", "Profesión", "Especialidad", "Sub. Especialidad", "Sub-especialidad",
+          "Campañas", "Lat", "Lng"
+        ],
+        maxRecords: 1000
+      })
+      .eachPage((records, next) => {
+        records.forEach(r => all.push(mapRecord(r)));
+        next();
+      });
 
-    const batchSize = 24;
-    const scored = [];
-    for (let i=0; i<providers.length; i+=batchSize){
-      const batch = providers.slice(i, i+batchSize);
-      const matrix = await getMatrix(origin, batch.map(p => ({ lat: p.lat, lng: p.lng })));
-      matrix.forEach((m, idx) => scored.push({ ...batch[idx], distance_m: m.distance_m, duration_s: m.duration_s }));
+    // 3) Filtro por chips
+    let filtered = all.filter(r => r.lat && r.lng);
+    if (type)          filtered = filtered.filter(r => (r.tipoProveedor || "").toLowerCase() === type.toLowerCase());
+    if (profession)    filtered = filtered.filter(r => (r.profesion || "").toLowerCase()   === profession.toLowerCase());
+    if (specialty)     filtered = filtered.filter(r => (r.especialidad || "").toLowerCase()=== specialty.toLowerCase());
+    if (subSpecialty)  filtered = filtered.filter(r => (r.subEspecialidad || "").toLowerCase() === subSpecialty.toLowerCase());
+    if (campaigns) {
+      const wanted = campaigns.split(",").map(s => s.trim().toLowerCase());
+      filtered = filtered.filter(r => {
+        const have = (r.campañas || []).map(x => String(x).toLowerCase());
+        return wanted.every(w => have.includes(w));
+      });
     }
-    scored.sort((a,b)=>a.duration_s - b.duration_s);
 
-    const limit = Number(req.query.limit || 20);
-    const pick = scored.slice(0, limit).map(r => ({
-      id: r.id,
-      nombre: r.nombre, direccion: r.direccion, municipio: r.municipio, estado: r.estado,
-      campañas: r.campañas, tipoProveedor: r.tipoProveedor, profesion: r.profesion,
-      especialidad: r.especialidad, subEspecialidad: r.subEspecialidad,
-      telefono: r.telefono, email: r.email,
-      lat: r.lat,               // ← añadido
-      lng: r.lng,               // ← añadido
-      distance_km: km(r.distance_m),
-      duration_min: min(r.duration_s),
-      mapPlaceUrl: `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lng}`,
-      mapDirUrl:   `https://www.google.com/maps/dir/?api=1&destination=${r.lat},${r.lng}`
-    }));
+    // 4) Matriz de tiempos/distancias (en lotes)
+    const maxChunk = 24;
+    for (let i = 0; i < filtered.length; i += maxChunk) {
+      const chunk = filtered.slice(i, i + maxChunk);
+      const matrix = await drivingMatrix(origin, chunk);
+      matrix.forEach(m => {
+        const idx = filtered.findIndex(x => x.id === m.id);
+        if (idx >= 0) {
+          filtered[idx].duration_min = m.duration_min;
+          filtered[idx].distance_km = m.distance_km;
+        }
+      });
+    }
 
-    res.json({ origin, count: scored.length, results: pick });
-  }catch(e){
-    res.status(500).json({ error: e.message || "Error interno" });
+    // 5) Ordena y limita
+    filtered = filtered
+      .filter(r => Number.isFinite(r.duration_min))
+      .sort((a, b) => a.duration_min - b.duration_min)
+      .slice(0, Number(limit) || 50);
+
+    res.status(200).json({ origin, count: filtered.length, results: filtered });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message || e) });
   }
 }
