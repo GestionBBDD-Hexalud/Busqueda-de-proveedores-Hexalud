@@ -1,3 +1,4 @@
+// /pages/index.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
@@ -84,6 +85,7 @@ export default function Home() {
   const [suggestions,setSuggestions] = useState([]);
   const [showSuggest,setShowSuggest] = useState(false);
   const suggestTimeout = useRef(null);
+  const suppressSuggestRef = useRef(false); // <- evita lag al seleccionar
 
   // Mapa
   const mapRef = useRef(null);
@@ -91,6 +93,7 @@ export default function Home() {
   const markersRef = useRef([]);
   const routeLayerId = useRef("hexalud-route");
   const routeSrcId = useRef("hexalud-route-src");
+  const destMarkerRef = useRef(null); // <- pin del destino
 
   /* Token público Mapbox */
   useEffect(()=>{(async()=>{try{const {data}=await axios.get("/api/mapbox-public-token");setTokenPub(data.token||"");}catch{}})();},[]);
@@ -104,7 +107,7 @@ export default function Home() {
   const professionOptions = facets.professions?.length?facets.professions:derived.professions;
   const specialtyOptions  = facets.specialties?.length?facets.specialties:derived.specialties;
   const subSpecOptions    = facets.subSpecialties?.length?facets.subSpecialties:derived.subSpecialties;
-  const campaignOptions   = facets.campaigns?.length?facets.campaigns:(derived.campaigns?.length?derived.campaigns:["Liverpool","Mutuus","Metlife"]);
+  const campaignOptions   = facets.campaigns?.length?facets.campaigns:(derived.campaigns?.length?derived.campaigns:["Liverpool","MetLife","Mutuus"]);
 
   /* Reglas de habilitado */
   const disabledProfession = /(sub|especialista)/i.test(type);
@@ -116,6 +119,7 @@ export default function Home() {
     setAddress("");setResults([]);setOrigin(null);setError("");setActiveId(null);
     setPrimaryLimit(PAGE_SIZE);setSecondaryLimit(PAGE_SIZE);setSuggestions([]);setShowSuggest(false);
     markersRef.current.forEach(m=>m.remove()); markersRef.current=[];
+    try { destMarkerRef.current?.remove?.(); } catch {}
     if(mapRef.current&&mapRef.current.getSource?.(routeSrcId.current)){
       if(mapRef.current.getLayer?.(routeLayerId.current)) mapRef.current.removeLayer(routeLayerId.current);
       mapRef.current.removeSource(routeSrcId.current);
@@ -164,8 +168,10 @@ export default function Home() {
 
   /* Autocomplete dirección */
   useEffect(()=>{
-    if(!tokenPub) return;
-    if(!address || address.trim().length<3){setSuggestions([]);setShowSuggest(false);return;}
+    if (!tokenPub) return;
+    if (suppressSuggestRef.current) return; // evita consulta inmediata tras seleccionar
+    if (!address || address.trim().length<3){ setSuggestions([]); setShowSuggest(false); return; }
+
     if(suggestTimeout.current) clearTimeout(suggestTimeout.current);
     suggestTimeout.current=setTimeout(async()=>{
       try{
@@ -176,7 +182,14 @@ export default function Home() {
       }catch{ setSuggestions([]); setShowSuggest(false); }
     },300);
   },[address,tokenPub]);
-  function selectSuggestion(s){ setAddress(s.label); setShowSuggest(false); }
+
+  function selectSuggestion(s){
+    suppressSuggestRef.current = true;
+    setAddress(s.label);
+    setShowSuggest(false);
+    setSuggestions([]);
+    setTimeout(()=>{ suppressSuggestRef.current = false; }, 0);
+  }
 
   /* MAPA: creación y pines */
   useEffect(()=>{
@@ -195,6 +208,7 @@ export default function Home() {
       }
       // limpia pines previos
       markersRef.current.forEach(m=>m.remove()); markersRef.current=[];
+      try { destMarkerRef.current?.remove?.(); } catch {}
       const map=mapRef.current, mbx=mapboxRef.current;
 
       // Origen (👤)
@@ -219,7 +233,7 @@ export default function Home() {
     })();
   },[showMap,origin,results]);
 
-  /* Ruta real con Mapbox Directions */
+  /* Ruta con Mapbox Directions */
   async function drawRouteTo(r){
     if(!showMap) setShowMap(true);
     setActiveId(r.id);
@@ -228,6 +242,17 @@ export default function Home() {
 
     const dest={lng:parseFloat(r.lng), lat:parseFloat(r.lat)};
     if(!Number.isFinite(dest.lng)||!Number.isFinite(dest.lat)) return;
+
+    // Marcador de destino (🏥)
+    try { destMarkerRef.current?.remove?.(); } catch {}
+    const el = document.createElement("div");
+    el.style.fontSize = "22px";
+    el.style.transform = "translateY(-2px)";
+    el.textContent = "🏥";
+    destMarkerRef.current = new mbx.Marker({ element: el })
+      .setLngLat([dest.lng, dest.lat])
+      .setPopup(new mbx.Popup().setText(r["Nombre de proveedor"] || "(Sin nombre)"))
+      .addTo(map);
 
     try{
       const {data}=await axios.get(
