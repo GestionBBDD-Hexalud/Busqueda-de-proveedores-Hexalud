@@ -4,57 +4,76 @@ import Airtable from "airtable";
 const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME } = process.env;
 const base = new Airtable({ apiKey: AIRTABLE_API_KEY }).base(AIRTABLE_BASE_ID);
 
-function clean(s){ return String(s || "").trim(); }
-function push(set,val){ val = clean(val); if(val) set.add(val); }
+// helpers
+const clean = (s) => String(s || "").trim();
+const push = (set, val) => {
+  val = clean(val);
+  if (val) set.add(val);
+};
 
-function normalizeCampaigns(list){
+// Normaliza campañas y elimina duplicados
+function normalizeCampaigns(list) {
   const map = new Map([
-    ["liverpool","Liverpool"],
-    ["metlife","MetLife"],
-    ["mutuus","Mutuus"],
-    ["mutus","Mutuus"], // corrige variantes
+    ["liverpool", "Liverpool"],
+    ["metlife", "MetLife"],
+    ["mutuus", "Mutuus"],
+    ["mutus", "Mutuus"], // corrige "mutus" -> "Mutuus"
   ]);
   const out = [];
-  (list || []).forEach(x=>{
-    const k = String(x||"").trim().toLowerCase();
-    if(!k) return;
+  (list || []).forEach((x) => {
+    const k = String(x || "").trim().toLowerCase();
+    if (!k) return;
     out.push(map.get(k) || x);
   });
   return [...new Set(out)];
 }
 
-export default async function handler(req,res){
-  try{
-    const sTypes=new Set(), sProfs=new Set(), sSpecs=new Set(), sSubs=new Set(), sCamps=new Set();
+export default async function handler(req, res) {
+  try {
+    const sTypes = new Set();
+    const sProfs = new Set();
+    const sSpecs = new Set();
+    const sSubs  = new Set();
+    const sCamps = new Set();
 
     await base(AIRTABLE_TABLE_NAME)
       .select({
-        fields: ["Tipo de proveedor","Profesión","Especialidad","Sub. Especialidad","Sub-especialidad","Campañas"],
-        maxRecords: 1000
+        // 👇 ¡Solo los campos que EXISTEN en tu base!
+        fields: [
+          "Tipo de proveedor",
+          "Profesión",
+          "Especialidad",
+          "Sub. Especialidad", // <-- existe en tu tabla
+          "Campañas",
+        ],
+        maxRecords: 1000,
       })
       .eachPage((records, next) => {
-        records.forEach(r=>{
-          const f=r.fields||{};
+        records.forEach((r) => {
+          const f = r.fields || {};
+
           push(sTypes, f["Tipo de proveedor"]);
           push(sProfs, f["Profesión"]);
           push(sSpecs, f["Especialidad"]);
-          push(sSubs,  f["Sub. Especialidad"] || f["Sub-especialidad"]);
-          normalizeCampaigns(f["Campañas"] || []).forEach(c=>push(sCamps,c));
+          push(sSubs,  f["Sub. Especialidad"]); // solo este nombre
+
+          // campañas normalizadas
+          normalizeCampaigns(f["Campañas"] || []).forEach((c) => push(sCamps, c));
         });
         next();
       });
 
-    const sort = (a)=>[...a].sort((x,y)=>x.localeCompare(y,"es"));
+    const sort = (set) => [...set].sort((a, b) => a.localeCompare(b, "es"));
 
     res.status(200).json({
       types: sort(sTypes),
       professions: sort(sProfs),
       specialties: sort(sSpecs),
       subSpecialties: sort(sSubs),
-      campaigns: sort(sCamps)
+      campaigns: sort(sCamps),
     });
-  }catch(e){
+  } catch (e) {
     console.error("❌ facets error", e);
-    res.status(500).json({error:String(e.message||e)});
+    res.status(500).json({ error: String(e.message || e) });
   }
 }
