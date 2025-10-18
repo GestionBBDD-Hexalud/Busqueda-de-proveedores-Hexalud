@@ -1,9 +1,6 @@
 // /pages/index.js
 import { useEffect, useRef, useState } from "react";
 
-// NOTA: NO importamos mapbox-gl aquí para evitar SSR crash
-// Lo cargamos dinámicamente en el cliente y lo guardamos en un ref.
-
 export default function Home() {
   // UI state
   const [address, setAddress] = useState("");
@@ -31,9 +28,12 @@ export default function Home() {
   const mapRef = useRef(null);
   const markersRef = useRef([]);
   const routeIdRef = useRef("active-route");
-
-  // Ref para la librería mapbox-gl cargada dinámicamente
   const mapboxglRef = useRef(null);
+
+  // Autocomplete
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSug, setShowSug] = useState(false);
+  const debounceRef = useRef(null);
 
   // ---------- Helpers marcadores ----------
   const clearMarkers = () => {
@@ -43,7 +43,7 @@ export default function Home() {
 
   const addMarker = ({ lng, lat }, { color = "#059669", popupHtml = "" } = {}) => {
     const mapboxgl = mapboxglRef.current;
-    if (!mapboxgl) return null;
+    if (!mapboxgl || !mapRef.current) return null;
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
     const el = document.createElement("div");
@@ -73,12 +73,11 @@ export default function Home() {
 
     clearMarkers();
 
-    // Origen (paciente) azul
+    // Origen (paciente)
     if (orig?.lng && orig?.lat) {
       addMarker(orig, { color: "#2563eb", popupHtml: "<strong>Paciente</strong>" });
     }
 
-    // Proveedores (verde)
     (providers || []).forEach((p) => {
       addMarker({ lng: p.lng, lat: p.lat }, {
         color: "#059669",
@@ -92,7 +91,6 @@ export default function Home() {
       });
     });
 
-    // Ajustar encuadre
     const bounds = new mapboxgl.LngLatBounds();
     if (orig?.lng && orig?.lat) bounds.extend([orig.lng, orig.lat]);
     (providers || []).forEach((p) => {
@@ -171,7 +169,7 @@ export default function Home() {
       setProfessions(data.professions || []);
       setSpecialties(data.specialties || []);
       setSubSpecialties(data.subSpecialties || []);
-      setCampaigns(data.campaigns || []);
+      setCampaigns((data.campaigns || []).filter((c) => c.toLowerCase() === "mutuus" ? "Mutuus" : c));
     } catch (e) {
       console.error("facets error", e);
     }
@@ -182,6 +180,7 @@ export default function Home() {
     if (!address.trim()) return;
     setLoading(true);
     setSelected(null);
+    setShowSug(false);
     try {
       const params = new URLSearchParams({
         address,
@@ -198,8 +197,12 @@ export default function Home() {
       setOrigin(data.origin || null);
       setResults(Array.isArray(data.results) ? data.results : []);
 
+      // Si el mapa está activo, colocamos pines
       if (showMap && data.origin && Array.isArray(data.results)) {
+        ensureMap(); // nos aseguramos que exista
         placeOriginAndProviders(data.origin, data.results);
+        // resize por si la columna cambió de tamaño
+        setTimeout(() => mapRef.current?.resize(), 50);
       }
     } catch (e) {
       console.error(e);
@@ -227,49 +230,89 @@ export default function Home() {
     );
   };
 
+  // Si eligen Especialista/Sub, bloqueamos Profesión
   useEffect(() => {
     if (["especialista", "subespecialista", "sub-especialista"].includes((type || "").toLowerCase())) {
       setProfession("");
     }
   }, [type]);
 
-  // ---------- Inicializa Mapa (carga dinámica de mapbox-gl) ----------
-  useEffect(() => {
-    if (!showMap) return;
-    if (mapRef.current) return; // ya creado
+  // ---------- Inicializa Mapa (lazy) ----------
+  const ensureMap = async () => {
+    if (!showMap) setShowMap(true);
+    if (mapRef.current) return; // ya existe
+    if (typeof window === "undefined") return;
 
-    (async () => {
-      try {
-        if (typeof window === "undefined") return;
-
-        const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-        if (!token) {
-          console.error("Falta NEXT_PUBLIC_MAPBOX_TOKEN");
-          return;
-        }
-
-        const mapboxgl = (await import("mapbox-gl")).default;
-        mapboxgl.accessToken = token;
-        mapboxglRef.current = mapboxgl;
-
-        mapRef.current = new mapboxgl.Map({
-          container: mapContainerRef.current,
-          style: "mapbox://styles/mapbox/streets-v11",
-          center: [-99.168, 19.39],
-          zoom: 11,
-        });
-
-        mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
-      } catch (e) {
-        console.error("Error inicializando Mapbox:", e);
+    try {
+      const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      if (!token) {
+        console.error("Falta NEXT_PUBLIC_MAPBOX_TOKEN");
+        return;
       }
-    })();
-  }, [showMap]);
 
-  // Carga facets al montar
+      const mapboxgl = (await import("mapbox-gl")).default;
+      mapboxgl.accessToken = token;
+      mapboxglRef.current = mapboxgl;
+
+      mapRef.current = new mapboxgl.Map({
+        container: mapContainerRef.current,
+        style: "mapbox://styles/mapbox/streets-v11",
+        center: [-99.168, 19.39],
+        zoom: 11,
+      });
+
+      mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+      setTimeout(() => mapRef.current?.resize(), 50);
+    } catch (e) {
+      console.error("Error inicializando Mapbox:", e);
+    }
+  };
+
   useEffect(() => {
     loadFacets();
   }, []);
+
+  // ---------- Autocomplete ----------
+  const fetchSuggestions = async (q) => {
+    try {
+      const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      if (!token || !q.trim()) {
+        setSuggestions([]);
+        return;
+      }
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+        q
+      )}.json?autocomplete=true&limit=5&language=es&country=mx&access_token=${token}`;
+      const data = await (await fetch(url)).json();
+      const items =
+        data?.features?.map((f) => ({
+          id: f.id,
+          label: f.place_name_es || f.place_name,
+        })) || [];
+      setSuggestions(items);
+      setShowSug(true);
+    } catch (e) {
+      console.error("autocomplete error", e);
+    }
+  };
+
+  const onAddressChange = (v) => {
+    setAddress(v);
+    setShowSug(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchSuggestions(v), 250);
+  };
+
+  const pickSuggestion = (s) => {
+    setAddress(s.label);
+    setShowSug(false);
+  };
+
+  // Scroll helper para llevar al mapa
+  const scrollToMap = () => {
+    if (!mapContainerRef.current) return;
+    mapContainerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
     <div className="page">
@@ -325,11 +368,27 @@ export default function Home() {
 
           <div className="row">
             <label>Dirección del paciente</label>
-            <input
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="Ej. Durango 296, Roma Norte, Cuauhtémoc, CDMX"
-            />
+            <div className="addr-box">
+              <input
+                value={address}
+                onChange={(e) => onAddressChange(e.target.value)}
+                placeholder="Ej. Durango 296, Roma Norte, Cuauhtémoc, CDMX"
+                onFocus={() => address && setShowSug(true)}
+              />
+              {showSug && suggestions.length > 0 && (
+                <div className="sug-list">
+                  {suggestions.map((s) => (
+                    <div
+                      className="sug-item"
+                      key={s.id}
+                      onMouseDown={() => pickSuggestion(s)}
+                    >
+                      {s.label}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="row chips">
@@ -352,7 +411,7 @@ export default function Home() {
               {loading ? "Buscando..." : "Buscar"}
             </button>
             <button onClick={handleReset}>Reiniciar filtros</button>
-            <button onClick={() => setShowMap((v) => !v)}>
+            <button onClick={() => { setShowMap((v) => !v); setTimeout(() => mapRef.current?.resize(), 50); }}>
               {showMap ? "Ocultar mapa" : "Mostrar mapa"}
             </button>
           </div>
@@ -390,14 +449,15 @@ export default function Home() {
                       </div>
                       <div className="buttons">
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             setSelected(r);
-                            if (origin && mapboxglRef.current) {
-                              clearMarkers();
-                              placeOriginAndProviders(origin, results);
-                              highlightSelected(r);
-                              drawRoute(origin, r);
-                            }
+                            await ensureMap();
+                            clearMarkers();
+                            placeOriginAndProviders(origin, results);
+                            highlightSelected(r);
+                            await drawRoute(origin, r);
+                            setTimeout(() => mapRef.current?.resize(), 50);
+                            scrollToMap();
                           }}
                         >
                           Ver en mapa
@@ -450,10 +510,17 @@ export default function Home() {
         .time { text-align: right; }
         .mins { font-weight: 700; font-size: 18px; }
         .kms { color: #6b7280; font-size: 12px; }
-        .buttons { display: grid; gap: 6px; }
         .map-col { position: relative; }
-        #map { width: 100%; height: 520px; border: 1px solid #e5e7eb; border-radius: 12px; }
+        #map { width: 100%; height: 520px; border: 1px solid #e5e7eb; border-radius: 12px; background: #f8fafc; }
         .route-selected { margin-top: 8px; font-size: 14px; }
+        .addr-box { position: relative; }
+        .sug-list {
+          position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+          background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+          z-index: 10; box-shadow: 0 8px 20px rgba(0,0,0,.06);
+        }
+        .sug-item { padding: 10px 12px; cursor: pointer; }
+        .sug-item:hover { background: #f3f4f6; }
         @media (max-width: 1100px) {
           .row { grid-template-columns: 1fr 1fr; }
           .results { grid-template-columns: 1fr; }
