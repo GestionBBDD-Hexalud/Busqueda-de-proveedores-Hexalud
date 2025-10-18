@@ -12,7 +12,7 @@ function normalizeCampaigns(list){
     ["liverpool","Liverpool"],
     ["metlife","MetLife"],
     ["mutuus","Mutuus"],
-    ["mutus","Mutuus"], // <- corrige “mutus”
+    ["mutus","Mutuus"], // corrige variantes
   ]);
   const out = [];
   (list || []).forEach(x=>{
@@ -54,7 +54,7 @@ export default async function handler(req,res){
       campaigns: sort(sCamps)
     });
   }catch(e){
-    console.error(e);
+    console.error("❌ facets error", e);
     res.status(500).json({error:String(e.message||e)});
   }
 }
