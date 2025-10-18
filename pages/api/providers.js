@@ -5,6 +5,10 @@ import axios from "axios";
 const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, MAPBOX_TOKEN } = process.env;
 const base = new Airtable({ apiKey: AIRTABLE_API_KEY }).base(AIRTABLE_BASE_ID);
 
+/* ---------- Helpers ---------- */
+const clean = (v) => String(v ?? "").trim();
+const firstOr = (v, def = "") => (Array.isArray(v) ? clean(v[0] ?? def) : clean(v ?? def));
+
 /* ---------- Normaliza campañas ---------- */
 function normalizeCampaigns(list) {
   const map = new Map([
@@ -29,21 +33,21 @@ function mapRecord(rec) {
     id: rec.id,
 
     // Nombre
-    "Nombre de proveedor": f["Nombre de proveedor"] || null,
+    "Nombre de proveedor": firstOr(f["Nombre de proveedor"], null) || null,
 
     // Dirección principal
-    direccion: f["Dirección Completa"] || "",
+    direccion: firstOr(f["Dirección Completa"]),
 
-    municipio: f["Ciudad o municipio"] || "",
-    estado:    f["Estado"] || "",
+    municipio: firstOr(f["Ciudad o municipio"]),
+    estado: firstOr(f["Estado"]),
 
-    // OJO: este encabezado en tu tabla tiene un ESPACIO al final.
-    telefono:  f["Teléfono principal "] || "",
+    // OJO: este encabezado tiene un espacio al final en tu tabla
+    telefono: firstOr(f["Teléfono principal "]),
 
-    tipoProveedor:   f["Tipo de proveedor"] || "",
-    profesion:       f["Profesión"] || "",
-    especialidad:    f["Especialidad"] || "",
-    subEspecialidad: f["Sub. Especialidad"] || "",
+    tipoProveedor: firstOr(f["Tipo de proveedor"]),
+    profesion: firstOr(f["Profesión"]),
+    especialidad: firstOr(f["Especialidad"]),
+    subEspecialidad: firstOr(f["Sub. Especialidad"]),
 
     campañas: normalizeCampaigns(f["Campañas"] || []),
 
@@ -106,7 +110,7 @@ export default async function handler(req, res) {
     const origin = await geocodeAddress(address);
     if (!origin) return res.status(400).json({ error: "Dirección no encontrada" });
 
-    // 2) Trae datos de Airtable (no especificamos fields para evitar errores por encabezados)
+    // 2) Trae datos de Airtable (sin 'fields' para evitar errores por encabezados)
     const all = [];
     await base(AIRTABLE_TABLE_NAME)
       .select({
@@ -121,26 +125,26 @@ export default async function handler(req, res) {
     // 3) Filtrado inicial: registros con coordenadas
     let filtered = all.filter((r) => r.lat && r.lng);
 
-    // 4) Filtros por chips
-    if (type)
-      filtered = filtered.filter(
-        (r) => (r.tipoProveedor || "").toLowerCase() === String(type).toLowerCase()
-      );
+    // 4) Filtros por chips (con coerción a string)
+    if (type) {
+      const t = String(type).toLowerCase();
+      filtered = filtered.filter((r) => String(r.tipoProveedor || "").toLowerCase() === t);
+    }
 
-    if (profession)
-      filtered = filtered.filter(
-        (r) => (r.profesion || "").toLowerCase() === String(profession).toLowerCase()
-      );
+    if (profession) {
+      const p = String(profession).toLowerCase();
+      filtered = filtered.filter((r) => String(r.profesion || "").toLowerCase() === p);
+    }
 
-    if (specialty)
-      filtered = filtered.filter(
-        (r) => (r.especialidad || "").toLowerCase() === String(specialty).toLowerCase()
-      );
+    if (specialty) {
+      const s = String(specialty).toLowerCase();
+      filtered = filtered.filter((r) => String(r.especialidad || "").toLowerCase() === s);
+    }
 
-    if (subSpecialty)
-      filtered = filtered.filter(
-        (r) => (r.subEspecialidad || "").toLowerCase() === String(subSpecialty).toLowerCase()
-      );
+    if (subSpecialty) {
+      const ss = String(subSpecialty).toLowerCase();
+      filtered = filtered.filter((r) => String(r.subEspecialidad || "").toLowerCase() === ss);
+    }
 
     if (campaigns) {
       const wanted = String(campaigns)
@@ -155,7 +159,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 5) Calcula tiempos/distancias por lotes (Mapbox directions-matrix)
+    // 5) Calcula tiempos/distancias por lotes
     const maxChunk = 24;
     for (let i = 0; i < filtered.length; i += maxChunk) {
       const chunk = filtered.slice(i, i + maxChunk);
