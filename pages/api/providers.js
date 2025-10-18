@@ -6,14 +6,13 @@ const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, MAPBOX_TOKEN } 
 
 const base = new Airtable({ apiKey: AIRTABLE_API_KEY }).base(AIRTABLE_BASE_ID);
 
-/* -------- Normalización de campañas --------
-   Une variantes y elimina duplicados */
+/* -------- Normalización de campañas (dedupe + variantes) -------- */
 function normalizeCampaigns(list) {
   const map = new Map([
     ["liverpool", "Liverpool"],
     ["metlife", "MetLife"],
     ["mutuus", "Mutuus"],
-    ["mutus", "Mutuus"], // Corrige el origen "mutus"
+    ["mutus", "Mutuus"], // corrige error de captura
   ]);
   const out = [];
   (list || []).forEach((x) => {
@@ -24,23 +23,45 @@ function normalizeCampaigns(list) {
   return [...new Set(out)];
 }
 
-/* -------- Mapeo del registro Airtable -------- */
+/* -------- Mapeo seguro de registros --------
+   Toma el campo que exista y deja null/"" si no está */
 function mapRecord(rec) {
   const f = rec.fields || {};
   return {
     id: rec.id,
-    "Nombre de proveedor": f["Nombre de proveedor"] || f["Nombre"] || null,
-    direccion: f["Dirección"] || f["Direcciones de Consultorios"] || f["direccion"] || "",
-    municipio: f["Ciudad o municipio"] || f["municipio"] || "",
-    estado: f["Estado"] || f["estado"] || "",
-    telefono: f["Teléfono"] || f["telefono"] || "",
+
+    // Nombre del proveedor (usa el que exista)
+    "Nombre de proveedor":
+      f["Nombre de proveedor"] ||
+      f["Nombre"] ||
+      f["Proveedor"] ||
+      null,
+
+    // Dirección (usa el campo que tengas)
+    direccion:
+      f["Direcciones de Consultorios"] ||
+      f["Dirección"] ||
+      f["Direccion"] ||
+      "",
+
+    municipio: f["Ciudad o municipio"] || f["Municipio"] || "",
+    estado: f["Estado"] || "",
+    telefono:
+      f["Teléfono"] ||
+      f["Telefono"] ||
+      f["Teléfono Personal"] ||
+      "",
+
     tipoProveedor: f["Tipo de proveedor"] || "",
     profesion: f["Profesión"] || "",
     especialidad: f["Especialidad"] || "",
     subEspecialidad: f["Sub. Especialidad"] || f["Sub-especialidad"] || "",
+
     campañas: normalizeCampaigns(f["Campañas"] || f["campañas"] || []),
+
     lat: Number(f["Lat"]) || null,
     lng: Number(f["Lng"]) || null,
+
     distance_km: null,
     duration_min: null,
   };
@@ -97,47 +118,56 @@ export default async function handler(req, res) {
     const origin = await geocodeAddress(address);
     if (!origin) return res.status(400).json({ error: "Dirección no encontrada" });
 
-    // 2) Consulta Airtable
+    // 2) Trae registros de Airtable (sin 'fields' para evitar errores por nombres)
     const all = [];
     await base(AIRTABLE_TABLE_NAME)
       .select({
-        // ✅ Solo los campos válidos de tu base
-        fields: [
-          "Nombre de proveedor",
-          "Dirección", "Direcciones de Consultorios",
-          "Ciudad o municipio", "Estado", "Teléfono",
-          "Tipo de proveedor", "Profesión", "Especialidad", "Sub. Especialidad", "Sub-especialidad",
-          "Campañas", "Lat", "Lng"
-        ],
         maxRecords: 1000,
+        // puedes fijar una view si te conviene:
+        // view: "Directorio General"
       })
       .eachPage((records, next) => {
         records.forEach((r) => all.push(mapRecord(r)));
         next();
       });
 
-    // 3) Filtro por chips
+    // 3) Filtra por chips (si se envían)
     let filtered = all.filter((r) => r.lat && r.lng);
 
     if (type)
-      filtered = filtered.filter((r) => (r.tipoProveedor || "").toLowerCase() === type.toLowerCase());
+      filtered = filtered.filter(
+        (r) => (r.tipoProveedor || "").toLowerCase() === String(type).toLowerCase()
+      );
+
     if (profession)
-      filtered = filtered.filter((r) => (r.profesion || "").toLowerCase() === profession.toLowerCase());
+      filtered = filtered.filter(
+        (r) => (r.profesion || "").toLowerCase() === String(profession).toLowerCase()
+      );
+
     if (specialty)
-      filtered = filtered.filter((r) => (r.especialidad || "").toLowerCase() === specialty.toLowerCase());
+      filtered = filtered.filter(
+        (r) => (r.especialidad || "").toLowerCase() === String(specialty).toLowerCase()
+      );
+
     if (subSpecialty)
       filtered = filtered.filter(
-        (r) => (r.subEspecialidad || "").toLowerCase() === subSpecialty.toLowerCase()
+        (r) => (r.subEspecialidad || "").toLowerCase() === String(subSpecialty).toLowerCase()
       );
+
     if (campaigns) {
-      const wanted = campaigns.split(",").map((s) => s.trim().toLowerCase());
-      filtered = filtered.filter((r) => {
-        const have = (r.campañas || []).map((x) => String(x).toLowerCase());
-        return wanted.every((w) => have.includes(w));
-      });
+      const wanted = String(campaigns)
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (wanted.length) {
+        filtered = filtered.filter((r) => {
+          const have = (r.campañas || []).map((x) => String(x).toLowerCase());
+          return wanted.every((w) => have.includes(w));
+        });
+      }
     }
 
-    // 4) Calcula tiempos/distancias por lotes
+    // 4) Tiempos/distancias por lotes
     const maxChunk = 24;
     for (let i = 0; i < filtered.length; i += maxChunk) {
       const chunk = filtered.slice(i, i + maxChunk);
@@ -151,13 +181,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // 5) Ordena y limita
+    // 5) Ordena por tiempo y limita
     filtered = filtered
       .filter((r) => Number.isFinite(r.duration_min))
       .sort((a, b) => a.duration_min - b.duration_min)
       .slice(0, Number(limit) || 50);
 
-    // 6) Devuelve resultados
     res.status(200).json({ origin, count: filtered.length, results: filtered });
   } catch (e) {
     console.error("❌ Error en /api/providers:", e);
