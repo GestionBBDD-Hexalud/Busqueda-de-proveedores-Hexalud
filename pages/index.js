@@ -1,8 +1,8 @@
 // /pages/index.js
 import { useEffect, useRef, useState } from "react";
-import mapboxgl from "mapbox-gl";
 
-mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+// NOTA: NO importamos mapbox-gl aquí para evitar SSR crash
+// Lo cargamos dinámicamente en el cliente y lo guardamos en un ref.
 
 export default function Home() {
   // UI state
@@ -24,7 +24,7 @@ export default function Home() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMap, setShowMap] = useState(true);
-  const [selected, setSelected] = useState(null); // proveedor seleccionado
+  const [selected, setSelected] = useState(null);
 
   // Map refs
   const mapContainerRef = useRef(null);
@@ -32,13 +32,18 @@ export default function Home() {
   const markersRef = useRef([]);
   const routeIdRef = useRef("active-route");
 
-  // -------- Helpers marcadores --------
+  // Ref para la librería mapbox-gl cargada dinámicamente
+  const mapboxglRef = useRef(null);
+
+  // ---------- Helpers marcadores ----------
   const clearMarkers = () => {
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = [];
   };
 
   const addMarker = ({ lng, lat }, { color = "#059669", popupHtml = "" } = {}) => {
+    const mapboxgl = mapboxglRef.current;
+    if (!mapboxgl) return null;
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
     const el = document.createElement("div");
@@ -63,6 +68,9 @@ export default function Home() {
   };
 
   const placeOriginAndProviders = (orig, providers) => {
+    const mapboxgl = mapboxglRef.current;
+    if (!mapboxgl || !mapRef.current) return;
+
     clearMarkers();
 
     // Origen (paciente) azul
@@ -97,7 +105,6 @@ export default function Home() {
 
   const highlightSelected = (prov) => {
     if (!prov?.lng || !prov?.lat) return;
-    // Marcador diferenciado para el seleccionado
     addMarker({ lng: prov.lng, lat: prov.lat }, {
       color: "#10b981",
       popupHtml: `
@@ -109,7 +116,7 @@ export default function Home() {
     });
   };
 
-  // -------- Ruta (origen -> seleccionado) --------
+  // ---------- Ruta (origen -> seleccionado) ----------
   const clearRoute = () => {
     if (!mapRef.current) return;
     if (mapRef.current.getSource(routeIdRef.current)) {
@@ -119,11 +126,14 @@ export default function Home() {
   };
 
   const drawRoute = async (orig, dest) => {
+    const mapboxgl = mapboxglRef.current;
+    if (!mapboxgl || !mapRef.current) return;
     try {
       clearRoute();
       if (!orig || !dest) return;
 
-      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${orig.lng},${orig.lat};${dest.lng},${dest.lat}?geometries=geojson&language=es&access_token=${mapboxgl.accessToken}`;
+      const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${orig.lng},${orig.lat};${dest.lng},${dest.lat}?geometries=geojson&language=es&access_token=${token}`;
       const data = await (await fetch(url)).json();
       const coords = data?.routes?.[0]?.geometry?.coordinates || [];
       if (!coords.length) return;
@@ -144,7 +154,6 @@ export default function Home() {
         paint: { "line-color": "#0ea5e9", "line-width": 5 },
       });
 
-      // Encadre a la ruta
       const b = new mapboxgl.LngLatBounds();
       coords.forEach((c) => b.extend(c));
       mapRef.current.fitBounds(b, { padding: 80, duration: 600 });
@@ -153,7 +162,7 @@ export default function Home() {
     }
   };
 
-  // --------- Fetch facets ---------
+  // ---------- Facets ----------
   const loadFacets = async () => {
     try {
       const res = await fetch("/api/facets");
@@ -168,7 +177,7 @@ export default function Home() {
     }
   };
 
-  // --------- Buscar ---------
+  // ---------- Buscar ----------
   const handleSearch = async () => {
     if (!address.trim()) return;
     setLoading(true);
@@ -199,7 +208,7 @@ export default function Home() {
     }
   };
 
-  // --------- Reiniciar ---------
+  // ---------- Reiniciar ----------
   const handleReset = () => {
     setType("");
     setProfession("");
@@ -212,34 +221,49 @@ export default function Home() {
     clearRoute();
   };
 
-  // --------- UI chips campañas ---------
   const toggleCampaign = (c) => {
     setSelectedCampaigns((prev) =>
       prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]
     );
   };
 
-  // --------- Cambios de tipo/relación con selects ---------
   useEffect(() => {
-    // Si es Especialista/Sub, la Profesión no aplica
-    if (["especialista", "subespecialista", "sub-especialista"].includes(type.toLowerCase())) {
+    if (["especialista", "subespecialista", "sub-especialista"].includes((type || "").toLowerCase())) {
       setProfession("");
     }
   }, [type]);
 
-  // --------- Inicializa Mapa ---------
+  // ---------- Inicializa Mapa (carga dinámica de mapbox-gl) ----------
   useEffect(() => {
     if (!showMap) return;
     if (mapRef.current) return; // ya creado
 
-    mapRef.current = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: "mapbox://styles/mapbox/streets-v11",
-      center: [-99.168, 19.39],
-      zoom: 11,
-    });
+    (async () => {
+      try {
+        if (typeof window === "undefined") return;
 
-    mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+        const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+        if (!token) {
+          console.error("Falta NEXT_PUBLIC_MAPBOX_TOKEN");
+          return;
+        }
+
+        const mapboxgl = (await import("mapbox-gl")).default;
+        mapboxgl.accessToken = token;
+        mapboxglRef.current = mapboxgl;
+
+        mapRef.current = new mapboxgl.Map({
+          container: mapContainerRef.current,
+          style: "mapbox://styles/mapbox/streets-v11",
+          center: [-99.168, 19.39],
+          zoom: 11,
+        });
+
+        mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+      } catch (e) {
+        console.error("Error inicializando Mapbox:", e);
+      }
+    })();
   }, [showMap]);
 
   // Carga facets al montar
@@ -269,7 +293,7 @@ export default function Home() {
               <select
                 value={profession}
                 onChange={(e) => setProfession(e.target.value)}
-                disabled={["especialista", "subespecialista", "sub-especialista"].includes(type.toLowerCase())}
+                disabled={["especialista", "subespecialista", "sub-especialista"].includes((type || "").toLowerCase())}
               >
                 <option value="">(Todas)</option>
                 {professions.map((p) => (
@@ -337,9 +361,7 @@ export default function Home() {
         {/* Resultados */}
         {results.length > 0 && (
           <>
-            <h3 className="subtitle">
-              En la localidad (≤ 60 min)
-            </h3>
+            <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
 
             <div className="results">
               <div className="list">
@@ -370,7 +392,7 @@ export default function Home() {
                         <button
                           onClick={() => {
                             setSelected(r);
-                            if (origin) {
+                            if (origin && mapboxglRef.current) {
                               clearMarkers();
                               placeOriginAndProviders(origin, results);
                               highlightSelected(r);
@@ -394,7 +416,6 @@ export default function Home() {
                 ))}
               </div>
 
-              {/* Mapa */}
               {showMap && (
                 <div className="map-col">
                   <div ref={mapContainerRef} id="map" />
