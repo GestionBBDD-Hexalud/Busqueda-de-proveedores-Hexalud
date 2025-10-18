@@ -13,7 +13,7 @@ function normalizeCampaigns(list) {
     ["liverpool", "Liverpool"],
     ["metlife", "MetLife"],
     ["mutuus", "Mutuus"],
-    ["mutus", "Mutuus"], // <- corrige el origen "mutus"
+    ["mutus", "Mutuus"], // Corrige el origen "mutus"
   ]);
   const out = [];
   (list || []).forEach((x) => {
@@ -24,34 +24,29 @@ function normalizeCampaigns(list) {
   return [...new Set(out)];
 }
 
+/* -------- Mapeo del registro Airtable -------- */
 function mapRecord(rec) {
   const f = rec.fields || {};
   return {
     id: rec.id,
-
-    // << nombre corregido a tu campo real
     "Nombre de proveedor": f["Nombre de proveedor"] || f["Nombre"] || null,
-
     direccion: f["Dirección"] || f["Direcciones de Consultorios"] || f["direccion"] || "",
     municipio: f["Ciudad o municipio"] || f["municipio"] || "",
-    estado:    f["Estado"] || f["estado"] || "",
-    telefono:  f["Teléfono"] || f["telefono"] || "",
-
-    tipoProveedor:   f["Tipo de proveedor"] || "",
-    profesion:       f["Profesión"] || "",
-    especialidad:    f["Especialidad"] || "",
+    estado: f["Estado"] || f["estado"] || "",
+    telefono: f["Teléfono"] || f["telefono"] || "",
+    tipoProveedor: f["Tipo de proveedor"] || "",
+    profesion: f["Profesión"] || "",
+    especialidad: f["Especialidad"] || "",
     subEspecialidad: f["Sub. Especialidad"] || f["Sub-especialidad"] || "",
-
     campañas: normalizeCampaigns(f["Campañas"] || f["campañas"] || []),
-
     lat: Number(f["Lat"]) || null,
     lng: Number(f["Lng"]) || null,
-
     distance_km: null,
     duration_min: null,
   };
 }
 
+/* -------- Geocodificación -------- */
 async function geocodeAddress(address) {
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json`;
   const { data } = await axios.get(url, {
@@ -59,17 +54,18 @@ async function geocodeAddress(address) {
   });
   const feat = data?.features?.[0];
   const [lng, lat] = feat?.center || [];
-  return (Number.isFinite(lat) && Number.isFinite(lng)) ? { lat, lng } : null;
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
 }
 
-/* Matriz de tiempos/distancias: origen -> destinos */
+/* -------- Matriz de tiempos/distancias -------- */
 async function drivingMatrix(orig, dests) {
-  const coords = [[orig.lng, orig.lat], ...dests.map(d => [d.lng, d.lat])]
-    .map(([x, y]) => `${x},${y}`).join(";");
+  const coords = [[orig.lng, orig.lat], ...dests.map((d) => [d.lng, d.lat])]
+    .map(([x, y]) => `${x},${y}`)
+    .join(";");
 
   const url = `https://api.mapbox.com/directions-matrix/v1/mapbox/driving/${coords}`;
   const { data } = await axios.get(url, {
-    params: { access_token: MAPBOX_TOKEN, annotations: "distance,duration" }
+    params: { access_token: MAPBOX_TOKEN, annotations: "distance,duration" },
   });
 
   const durations = (data?.durations?.[0] || []).slice(1);
@@ -82,6 +78,7 @@ async function drivingMatrix(orig, dests) {
   }));
 }
 
+/* -------- Handler principal -------- */
 export default async function handler(req, res) {
   try {
     const {
@@ -100,45 +97,53 @@ export default async function handler(req, res) {
     const origin = await geocodeAddress(address);
     if (!origin) return res.status(400).json({ error: "Dirección no encontrada" });
 
-    // 2) Lee Airtable
+    // 2) Consulta Airtable
     const all = [];
     await base(AIRTABLE_TABLE_NAME)
       .select({
+        // ✅ Solo los campos válidos de tu base
         fields: [
-          "Nombre de proveedor", "Nombre",
+          "Nombre de proveedor",
           "Dirección", "Direcciones de Consultorios",
           "Ciudad o municipio", "Estado", "Teléfono",
           "Tipo de proveedor", "Profesión", "Especialidad", "Sub. Especialidad", "Sub-especialidad",
           "Campañas", "Lat", "Lng"
         ],
-        maxRecords: 1000
+        maxRecords: 1000,
       })
       .eachPage((records, next) => {
-        records.forEach(r => all.push(mapRecord(r)));
+        records.forEach((r) => all.push(mapRecord(r)));
         next();
       });
 
     // 3) Filtro por chips
-    let filtered = all.filter(r => r.lat && r.lng);
-    if (type)          filtered = filtered.filter(r => (r.tipoProveedor || "").toLowerCase() === type.toLowerCase());
-    if (profession)    filtered = filtered.filter(r => (r.profesion || "").toLowerCase()   === profession.toLowerCase());
-    if (specialty)     filtered = filtered.filter(r => (r.especialidad || "").toLowerCase()=== specialty.toLowerCase());
-    if (subSpecialty)  filtered = filtered.filter(r => (r.subEspecialidad || "").toLowerCase() === subSpecialty.toLowerCase());
+    let filtered = all.filter((r) => r.lat && r.lng);
+
+    if (type)
+      filtered = filtered.filter((r) => (r.tipoProveedor || "").toLowerCase() === type.toLowerCase());
+    if (profession)
+      filtered = filtered.filter((r) => (r.profesion || "").toLowerCase() === profession.toLowerCase());
+    if (specialty)
+      filtered = filtered.filter((r) => (r.especialidad || "").toLowerCase() === specialty.toLowerCase());
+    if (subSpecialty)
+      filtered = filtered.filter(
+        (r) => (r.subEspecialidad || "").toLowerCase() === subSpecialty.toLowerCase()
+      );
     if (campaigns) {
-      const wanted = campaigns.split(",").map(s => s.trim().toLowerCase());
-      filtered = filtered.filter(r => {
-        const have = (r.campañas || []).map(x => String(x).toLowerCase());
-        return wanted.every(w => have.includes(w));
+      const wanted = campaigns.split(",").map((s) => s.trim().toLowerCase());
+      filtered = filtered.filter((r) => {
+        const have = (r.campañas || []).map((x) => String(x).toLowerCase());
+        return wanted.every((w) => have.includes(w));
       });
     }
 
-    // 4) Matriz de tiempos/distancias (en lotes)
+    // 4) Calcula tiempos/distancias por lotes
     const maxChunk = 24;
     for (let i = 0; i < filtered.length; i += maxChunk) {
       const chunk = filtered.slice(i, i + maxChunk);
       const matrix = await drivingMatrix(origin, chunk);
-      matrix.forEach(m => {
-        const idx = filtered.findIndex(x => x.id === m.id);
+      matrix.forEach((m) => {
+        const idx = filtered.findIndex((x) => x.id === m.id);
         if (idx >= 0) {
           filtered[idx].duration_min = m.duration_min;
           filtered[idx].distance_km = m.distance_km;
@@ -148,13 +153,14 @@ export default async function handler(req, res) {
 
     // 5) Ordena y limita
     filtered = filtered
-      .filter(r => Number.isFinite(r.duration_min))
+      .filter((r) => Number.isFinite(r.duration_min))
       .sort((a, b) => a.duration_min - b.duration_min)
       .slice(0, Number(limit) || 50);
 
+    // 6) Devuelve resultados
     res.status(200).json({ origin, count: filtered.length, results: filtered });
   } catch (e) {
-    console.error(e);
+    console.error("❌ Error en /api/providers:", e);
     res.status(500).json({ error: String(e.message || e) });
   }
 }
