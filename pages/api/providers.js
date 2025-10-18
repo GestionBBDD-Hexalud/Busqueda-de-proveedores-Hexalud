@@ -3,16 +3,15 @@ import Airtable from "airtable";
 import axios from "axios";
 
 const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, MAPBOX_TOKEN } = process.env;
-
 const base = new Airtable({ apiKey: AIRTABLE_API_KEY }).base(AIRTABLE_BASE_ID);
 
-/* -------- Normalización de campañas (dedupe + variantes) -------- */
+/* ---------- Normaliza campañas ---------- */
 function normalizeCampaigns(list) {
   const map = new Map([
     ["liverpool", "Liverpool"],
     ["metlife", "MetLife"],
     ["mutuus", "Mutuus"],
-    ["mutus", "Mutuus"], // corrige error de captura
+    ["mutus", "Mutuus"],
   ]);
   const out = [];
   (list || []).forEach((x) => {
@@ -23,41 +22,30 @@ function normalizeCampaigns(list) {
   return [...new Set(out)];
 }
 
-/* -------- Mapeo seguro de registros --------
-   Toma el campo que exista y deja null/"" si no está */
+/* ---------- Mapeo seguro ---------- */
 function mapRecord(rec) {
   const f = rec.fields || {};
   return {
     id: rec.id,
 
-    // Nombre del proveedor (usa el que exista)
-    "Nombre de proveedor":
-      f["Nombre de proveedor"] ||
-      f["Nombre"] ||
-      f["Proveedor"] ||
-      null,
+    // Nombre
+    "Nombre de proveedor": f["Nombre de proveedor"] || null,
 
-    // Dirección (usa el campo que tengas)
-    direccion:
-      f["Direcciones de Consultorios"] ||
-      f["Dirección"] ||
-      f["Direccion"] ||
-      "",
+    // Dirección principal
+    direccion: f["Dirección Completa"] || "",
 
-    municipio: f["Ciudad o municipio"] || f["Municipio"] || "",
-    estado: f["Estado"] || "",
-    telefono:
-      f["Teléfono"] ||
-      f["Telefono"] ||
-      f["Teléfono Personal"] ||
-      "",
+    municipio: f["Ciudad o municipio"] || "",
+    estado:    f["Estado"] || "",
 
-    tipoProveedor: f["Tipo de proveedor"] || "",
-    profesion: f["Profesión"] || "",
-    especialidad: f["Especialidad"] || "",
-    subEspecialidad: f["Sub. Especialidad"] || f["Sub-especialidad"] || "",
+    // OJO: este encabezado en tu tabla tiene un ESPACIO al final.
+    telefono:  f["Teléfono principal "] || "",
 
-    campañas: normalizeCampaigns(f["Campañas"] || f["campañas"] || []),
+    tipoProveedor:   f["Tipo de proveedor"] || "",
+    profesion:       f["Profesión"] || "",
+    especialidad:    f["Especialidad"] || "",
+    subEspecialidad: f["Sub. Especialidad"] || "",
+
+    campañas: normalizeCampaigns(f["Campañas"] || []),
 
     lat: Number(f["Lat"]) || null,
     lng: Number(f["Lng"]) || null,
@@ -67,7 +55,7 @@ function mapRecord(rec) {
   };
 }
 
-/* -------- Geocodificación -------- */
+/* ---------- Geocodificación ---------- */
 async function geocodeAddress(address) {
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json`;
   const { data } = await axios.get(url, {
@@ -78,7 +66,7 @@ async function geocodeAddress(address) {
   return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
 }
 
-/* -------- Matriz de tiempos/distancias -------- */
+/* ---------- Matrix tiempos/distancias ---------- */
 async function drivingMatrix(orig, dests) {
   const coords = [[orig.lng, orig.lat], ...dests.map((d) => [d.lng, d.lat])]
     .map(([x, y]) => `${x},${y}`)
@@ -99,7 +87,7 @@ async function drivingMatrix(orig, dests) {
   }));
 }
 
-/* -------- Handler principal -------- */
+/* ---------- Handler principal ---------- */
 export default async function handler(req, res) {
   try {
     const {
@@ -118,22 +106,22 @@ export default async function handler(req, res) {
     const origin = await geocodeAddress(address);
     if (!origin) return res.status(400).json({ error: "Dirección no encontrada" });
 
-    // 2) Trae registros de Airtable (sin 'fields' para evitar errores por nombres)
+    // 2) Trae datos de Airtable (no especificamos fields para evitar errores por encabezados)
     const all = [];
     await base(AIRTABLE_TABLE_NAME)
       .select({
         maxRecords: 1000,
-        // puedes fijar una view si te conviene:
-        // view: "Directorio General"
+        // view: "Directorio General" // opcional
       })
       .eachPage((records, next) => {
         records.forEach((r) => all.push(mapRecord(r)));
         next();
       });
 
-    // 3) Filtra por chips (si se envían)
+    // 3) Filtrado inicial: registros con coordenadas
     let filtered = all.filter((r) => r.lat && r.lng);
 
+    // 4) Filtros por chips
     if (type)
       filtered = filtered.filter(
         (r) => (r.tipoProveedor || "").toLowerCase() === String(type).toLowerCase()
@@ -167,7 +155,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4) Tiempos/distancias por lotes
+    // 5) Calcula tiempos/distancias por lotes (Mapbox directions-matrix)
     const maxChunk = 24;
     for (let i = 0; i < filtered.length; i += maxChunk) {
       const chunk = filtered.slice(i, i + maxChunk);
@@ -181,7 +169,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 5) Ordena por tiempo y limita
+    // 6) Ordena por tiempo y limita
     filtered = filtered
       .filter((r) => Number.isFinite(r.duration_min))
       .sort((a, b) => a.duration_min - b.duration_min)
