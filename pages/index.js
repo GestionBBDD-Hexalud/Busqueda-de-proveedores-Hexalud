@@ -1,5 +1,15 @@
-// /pages/index.js
 import { useEffect, useRef, useState } from "react";
+
+/** ===== Utilidades ===== */
+const formatDuration = (min) => {
+  if (min == null || isNaN(min)) return "– min";
+  const m = Math.round(min);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  if (r === 0) return `${h} hr`;
+  return `${h} hr ${r} min`;
+};
 
 export default function Home() {
   // UI state
@@ -35,30 +45,46 @@ export default function Home() {
   const [showSug, setShowSug] = useState(false);
   const debounceRef = useRef(null);
 
-  // ---------- Helpers marcadores ----------
+  /** ===== Marcadores ===== */
+
   const clearMarkers = () => {
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = [];
   };
 
-  const addMarker = ({ lng, lat }, { color = "#059669", popupHtml = "" } = {}) => {
+  // Icono SVG “doctor”
+  const doctorSvg = (size = 18, color = "#059669") => `
+    <svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="7" r="4" stroke="${color}" stroke-width="1.6"/>
+      <path d="M4 20c0-3.3 3.1-6 8-6s8 2.7 8 6" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M12 9v4" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M10 11h4" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+  `;
+
+  const makeMarkerEl = (size = 18, color = "#059669") => {
+    const el = document.createElement("div");
+    el.innerHTML = doctorSvg(size, color);
+    el.style.transform = "translate(-50%,-50%)";
+    el.style.display = "grid";
+    el.style.placeItems = "center";
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    return el;
+  };
+
+  const addMarker = ({ lng, lat }, { color = "#059669", popupHtml = "", size = 18 } = {}) => {
     const mapboxgl = mapboxglRef.current;
     if (!mapboxgl || !mapRef.current) return null;
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
-    const el = document.createElement("div");
-    el.style.width = "14px";
-    el.style.height = "14px";
-    el.style.borderRadius = "50%";
-    el.style.background = color;
-    el.style.boxShadow = "0 0 0 2px #fff, 0 1px 6px rgba(0,0,0,.35)";
-
-    const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+    const el = makeMarkerEl(size, color);
+    const marker = new mapboxgl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([lng, lat]);
 
     if (popupHtml) {
       marker.setPopup(
-        new mapboxgl.Popup({ offset: 16, closeButton: true }).setHTML(popupHtml)
+        new mapboxgl.Popup({ offset: 20, closeButton: true }).setHTML(popupHtml)
       );
     }
 
@@ -73,19 +99,30 @@ export default function Home() {
 
     clearMarkers();
 
-    // Origen (paciente)
+    // Origen (paciente) – usaremos un pin azul
     if (orig?.lng && orig?.lat) {
-      addMarker(orig, { color: "#2563eb", popupHtml: "<strong>Paciente</strong>" });
+      const el = document.createElement("div");
+      el.style.width = "14px";
+      el.style.height = "14px";
+      el.style.borderRadius = "50%";
+      el.style.background = "#2563eb";
+      el.style.boxShadow = "0 0 0 2px #fff, 0 1px 6px rgba(0,0,0,.35)";
+      new mapboxgl.Marker({ element: el, anchor: "center" })
+        .setLngLat([orig.lng, orig.lat])
+        .setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML("<strong>Paciente</strong>"))
+        .addTo(mapRef.current);
     }
 
     (providers || []).forEach((p) => {
       addMarker({ lng: p.lng, lat: p.lat }, {
         color: "#059669",
+        size: 18,
         popupHtml: `
-          <div style="min-width:220px">
+          <div style="min-width:240px">
             <strong>${p["Nombre de proveedor"] || "Proveedor"}</strong><br/>
             ${p.direccion || ""}<br/>
-            ${p.duration_min ?? "–"} min · ${p.distance_km ?? "–"} km
+            ${p.profesion || ""}${p.especialidad ? ` | <em>${p.especialidad}</em>` : ""}<br/>
+            ${formatDuration(p.duration_min)} · ${p.distance_km ?? "–"} km
           </div>
         `
       });
@@ -104,17 +141,19 @@ export default function Home() {
   const highlightSelected = (prov) => {
     if (!prov?.lng || !prov?.lat) return;
     addMarker({ lng: prov.lng, lat: prov.lat }, {
-      color: "#10b981",
+      color: "#0ea5e9",
+      size: 24, // marcador más grande para el seleccionado
       popupHtml: `
-        <div style="min-width:240px">
+        <div style="min-width:260px">
           <strong>${prov["Nombre de proveedor"] || "Proveedor"}</strong><br/>
           ${prov.direccion || ""}<br/>
-          <em>${prov.duration_min ?? "–"} min · ${prov.distance_km ?? "–"} km</em>
+          ${prov.profesion || ""}${prov.especialidad ? ` | <em>${prov.especialidad}</em>` : ""}<br/>
+          ${formatDuration(prov.duration_min)} · ${prov.distance_km ?? "–"} km
         </div>`
     });
   };
 
-  // ---------- Ruta (origen -> seleccionado) ----------
+  /** ===== Ruta (origen -> seleccionado) ===== */
   const clearRoute = () => {
     if (!mapRef.current) return;
     if (mapRef.current.getSource(routeIdRef.current)) {
@@ -160,7 +199,7 @@ export default function Home() {
     }
   };
 
-  // ---------- Facets ----------
+  /** ===== Facets ===== */
   const loadFacets = async () => {
     try {
       const res = await fetch("/api/facets");
@@ -169,13 +208,13 @@ export default function Home() {
       setProfessions(data.professions || []);
       setSpecialties(data.specialties || []);
       setSubSpecialties(data.subSpecialties || []);
-      setCampaigns((data.campaigns || []).filter((c) => c.toLowerCase() === "mutuus" ? "Mutuus" : c));
+      setCampaigns((data.campaigns || []).filter((c) => (c || "").toLowerCase() === "mutuus" ? "Mutuus" : c));
     } catch (e) {
       console.error("facets error", e);
     }
   };
 
-  // ---------- Buscar ----------
+  /** ===== Buscar ===== */
   const handleSearch = async () => {
     if (!address.trim()) return;
     setLoading(true);
@@ -197,11 +236,9 @@ export default function Home() {
       setOrigin(data.origin || null);
       setResults(Array.isArray(data.results) ? data.results : []);
 
-      // Si el mapa está activo, colocamos pines
       if (showMap && data.origin && Array.isArray(data.results)) {
-        ensureMap(); // nos aseguramos que exista
+        await ensureMap();
         placeOriginAndProviders(data.origin, data.results);
-        // resize por si la columna cambió de tamaño
         setTimeout(() => mapRef.current?.resize(), 50);
       }
     } catch (e) {
@@ -211,7 +248,7 @@ export default function Home() {
     }
   };
 
-  // ---------- Reiniciar ----------
+  /** ===== Reiniciar ===== */
   const handleReset = () => {
     setType("");
     setProfession("");
@@ -237,7 +274,7 @@ export default function Home() {
     }
   }, [type]);
 
-  // ---------- Inicializa Mapa (lazy) ----------
+  /** ===== Inicializa Mapa (lazy) ===== */
   const ensureMap = async () => {
     if (!showMap) setShowMap(true);
     if (mapRef.current) return; // ya existe
@@ -249,7 +286,6 @@ export default function Home() {
         console.error("Falta NEXT_PUBLIC_MAPBOX_TOKEN");
         return;
       }
-
       const mapboxgl = (await import("mapbox-gl")).default;
       mapboxgl.accessToken = token;
       mapboxglRef.current = mapboxgl;
@@ -272,7 +308,7 @@ export default function Home() {
     loadFacets();
   }, []);
 
-  // ---------- Autocomplete ----------
+  /** ===== Autocomplete ===== */
   const fetchSuggestions = async (q) => {
     try {
       const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
@@ -313,6 +349,10 @@ export default function Home() {
     if (!mapContainerRef.current) return;
     mapContainerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+
+  /** ===== Agrupación por tiempo ===== */
+  const inLocal = results.filter((r) => (r?.duration_min ?? 9999) <= 60);
+  const outLocal = results.filter((r) => (r?.duration_min ?? 9999) > 60);
 
   return (
     <div className="page">
@@ -420,75 +460,50 @@ export default function Home() {
         {/* Resultados */}
         {results.length > 0 && (
           <>
-            <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
+            {inLocal.length > 0 && (
+              <>
+                <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
+                <SectionList
+                  list={inLocal}
+                  origin={origin}
+                  setSelected={setSelected}
+                  ensureMap={ensureMap}
+                  placeOriginAndProviders={placeOriginAndProviders}
+                  drawRoute={drawRoute}
+                  highlightSelected={highlightSelected}
+                  scrollToMap={scrollToMap}
+                />
+              </>
+            )}
 
-            <div className="results">
-              <div className="list">
-                {results.map((r) => (
-                  <div key={r.id} className="card">
-                    <div className="card-body">
-                      <div className="card-title">
-                        <strong>{r["Nombre de proveedor"] || "(Sin nombre)"}</strong>
-                      </div>
-                      <div className="card-text">{r.direccion}</div>
-                      <div className="card-meta">
-                        <span>Especialista</span> · {r.profesion || ""} {r.especialidad ? `| ${r.especialidad}` : ""}
-                      </div>
-                      <div className="card-meta">
-                        {r.campañas && r.campañas.length ? `· ${r.campañas.join(", ")}` : ""}
-                      </div>
-                      <div className="card-meta">
-                        {r.telefono ? `· ${r.telefono}` : ""}
-                      </div>
-                    </div>
-
-                    <div className="card-aside">
-                      <div className="time">
-                        <div className="mins">{r.duration_min ?? "–"} min</div>
-                        <div className="kms">{r.distance_km ?? "–"} km</div>
-                      </div>
-                      <div className="buttons">
-                        <button
-                          onClick={async () => {
-                            setSelected(r);
-                            await ensureMap();
-                            clearMarkers();
-                            placeOriginAndProviders(origin, results);
-                            highlightSelected(r);
-                            await drawRoute(origin, r);
-                            setTimeout(() => mapRef.current?.resize(), 50);
-                            scrollToMap();
-                          }}
-                        >
-                          Ver en mapa
-                        </button>
-                        <button
-                          onClick={() => {
-                            const text = `${r["Nombre de proveedor"] || ""}\n${r.direccion || ""}\n${r.duration_min ?? "–"} min · ${r.distance_km ?? "–"} km\n${r.telefono || ""}`;
-                            navigator.clipboard.writeText(text);
-                          }}
-                        >
-                          Copiar ficha
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {showMap && (
-                <div className="map-col">
-                  <div ref={mapContainerRef} id="map" />
-                  {selected && (
-                    <div className="route-selected">
-                      <strong>Ruta seleccionada:</strong>{" "}
-                      {selected["Nombre de proveedor"] || "(Sin nombre)"} · {selected.duration_min ?? "–"} min · {selected.distance_km ?? "–"} km
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            {outLocal.length > 0 && (
+              <>
+                <h3 className="subtitle" style={{ marginTop: 16 }}>Opciones secundarias (&gt; 60 min)</h3>
+                <SectionList
+                  list={outLocal}
+                  origin={origin}
+                  setSelected={setSelected}
+                  ensureMap={ensureMap}
+                  placeOriginAndProviders={placeOriginAndProviders}
+                  drawRoute={drawRoute}
+                  highlightSelected={highlightSelected}
+                  scrollToMap={scrollToMap}
+                />
+              </>
+            )}
           </>
+        )}
+
+        {showMap && (
+          <div className="map-col" style={{ marginTop: results.length ? 12 : 0 }}>
+            <div ref={mapContainerRef} id="map" />
+            {selected && (
+              <div className="route-selected">
+                <strong>Ruta seleccionada:</strong>{" "}
+                {selected["Nombre de proveedor"] || "(Sin nombre)"} · {formatDuration(selected.duration_min)} · {selected.distance_km ?? "–"} km
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -503,7 +518,6 @@ export default function Home() {
         input, select, button { padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
         .chip { border: 1px solid #e5e7eb; padding: 6px 12px; border-radius: 20px; background: #fff; }
         .chip.active { background: #e6f4ea; border-color: #10b981; }
-        .results { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .list { display: grid; gap: 12px; }
         .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
         .card-aside { display: grid; gap: 8px; align-items: center; justify-items: end; }
@@ -521,11 +535,77 @@ export default function Home() {
         }
         .sug-item { padding: 10px 12px; cursor: pointer; }
         .sug-item:hover { background: #f3f4f6; }
+        .subtitle { margin: 10px 0 8px; }
         @media (max-width: 1100px) {
           .row { grid-template-columns: 1fr 1fr; }
-          .results { grid-template-columns: 1fr; }
         }
       `}</style>
+    </div>
+  );
+}
+
+/** ===== Componente de lista (reutilizable para ambas secciones) ===== */
+function SectionList({
+  list,
+  origin,
+  setSelected,
+  ensureMap,
+  placeOriginAndProviders,
+  drawRoute,
+  highlightSelected,
+  scrollToMap,
+}) {
+  return (
+    <div className="list">
+      {list.map((r) => (
+        <div key={r.id} className="card">
+          <div className="card-body">
+            <div className="card-title">
+              <strong>{r["Nombre de proveedor"] || "(Sin nombre)"}</strong>
+            </div>
+            <div className="card-text">{r.direccion}</div>
+            <div className="card-meta">
+              <span>Especialista</span> · {r.profesion || ""} {r.especialidad ? `| ${r.especialidad}` : ""}
+            </div>
+            <div className="card-meta">
+              {r.campañas && r.campañas.length ? `· ${r.campañas.join(", ")}` : ""}
+            </div>
+            <div className="card-meta">
+              {r.telefono ? `· ${r.telefono}` : ""}
+            </div>
+          </div>
+
+          <div className="card-aside">
+            <div className="time">
+              <div className="mins">{formatDuration(r.duration_min)}</div>
+              <div className="kms">{r.distance_km ?? "–"} km</div>
+            </div>
+            <div className="buttons">
+              <button
+                onClick={async () => {
+                  setSelected(r);
+                  await ensureMap();
+                  placeOriginAndProviders(origin, list);
+                  highlightSelected(r);
+                  await drawRoute(origin, r);
+                  setTimeout(() => document.getElementById("map")?.scrollIntoView({ behavior: "smooth" }), 50);
+                  scrollToMap();
+                }}
+              >
+                Ver en mapa
+              </button>
+              <button
+                onClick={() => {
+                  const text = `${r["Nombre de proveedor"] || ""}\n${r.direccion || ""}\n${formatDuration(r.duration_min)} · ${r.distance_km ?? "–"} km\n${r.telefono || ""}`;
+                  navigator.clipboard.writeText(text);
+                }}
+              >
+                Copiar ficha
+              </button>
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
