@@ -10,6 +10,45 @@ const formatDuration = (min) => {
   if (r === 0) return `${h} hr`;
   return `${h} hr ${r} min`;
 };
+<style jsx global>{`
+  .hex-marker-origin {
+    width: 16px;
+    height: 16px;
+    background: #2563eb;           /* azul */
+    border: 3px solid #ffffff;      /* aro blanco */
+    border-radius: 9999px;
+    position: relative;
+    box-shadow: 0 1px 6px rgba(0,0,0,.25);
+    transform: translate(-50%, -50%);
+  }
+  .hex-marker-origin::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    transform: translate(-50%, -50%);
+    border: 3px solid rgba(37,99,235,.45);
+    animation: hex-pulse 1.6s ease-out infinite;
+  }
+  @keyframes hex-pulse {
+    0%   { transform: translate(-50%, -50%) scale(.6); opacity: .75; }
+    100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+  }
+
+  .hex-marker-provider {
+    width: 30px;
+    height: 30px;
+    transform: translate(-50%, -100%); /* ancla en la punta del pin */
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,.35));
+  }
+
+  .hex-marker-provider svg {
+    display: block;
+  }
+`}</style>
 
 export default function Home() {
   // UI state
