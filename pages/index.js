@@ -10,45 +10,6 @@ const formatDuration = (min) => {
   if (r === 0) return `${h} hr`;
   return `${h} hr ${r} min`;
 };
-<style jsx global>{`
-  .hex-marker-origin {
-    width: 16px;
-    height: 16px;
-    background: #2563eb;           /* azul */
-    border: 3px solid #ffffff;      /* aro blanco */
-    border-radius: 9999px;
-    position: relative;
-    box-shadow: 0 1px 6px rgba(0,0,0,.25);
-    transform: translate(-50%, -50%);
-  }
-  .hex-marker-origin::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 16px;
-    height: 16px;
-    border-radius: 9999px;
-    transform: translate(-50%, -50%);
-    border: 3px solid rgba(37,99,235,.45);
-    animation: hex-pulse 1.6s ease-out infinite;
-  }
-  @keyframes hex-pulse {
-    0%   { transform: translate(-50%, -50%) scale(.6); opacity: .75; }
-    100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
-  }
-
-  .hex-marker-provider {
-    width: 30px;
-    height: 30px;
-    transform: translate(-50%, -100%); /* ancla en la punta del pin */
-    filter: drop-shadow(0 1px 4px rgba(0,0,0,.35));
-  }
-
-  .hex-marker-provider svg {
-    display: block;
-  }
-`}</style>
 
 export default function Home() {
   // UI state
@@ -138,7 +99,7 @@ export default function Home() {
 
     clearMarkers();
 
-    // Origen (paciente) – usaremos un pin azul
+    // Origen (paciente) – punto azul con borde blanco
     if (orig?.lng && orig?.lat) {
       const el = document.createElement("div");
       el.style.width = "14px";
@@ -383,12 +344,6 @@ export default function Home() {
     setShowSug(false);
   };
 
-  // Scroll helper para llevar al mapa
-  const scrollToMap = () => {
-    if (!mapContainerRef.current) return;
-    mapContainerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
   /** ===== Agrupación por tiempo ===== */
   const inLocal = results.filter((r) => (r?.duration_min ?? 9999) <= 60);
   const outLocal = results.filter((r) => (r?.duration_min ?? 9999) > 60);
@@ -496,56 +451,59 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Resultados */}
-        {results.length > 0 && (
-          <>
-            {inLocal.length > 0 && (
+        {/* === LAYOUT: resultados + mapa sticky (desktop) === */}
+        <div className="layout">
+          <section className="resultsCol">
+            {results.length > 0 && (
               <>
-                <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
-                <SectionList
-                  list={inLocal}
-                  origin={origin}
-                  setSelected={setSelected}
-                  ensureMap={ensureMap}
-                  placeOriginAndProviders={placeOriginAndProviders}
-                  drawRoute={drawRoute}
-                  highlightSelected={highlightSelected}
-                  scrollToMap={scrollToMap}
-                />
+                {inLocal.length > 0 && (
+                  <>
+                    <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
+                    <SectionList
+                      list={inLocal}
+                      origin={origin}
+                      setSelected={setSelected}
+                      ensureMap={ensureMap}
+                      placeOriginAndProviders={placeOriginAndProviders}
+                      drawRoute={drawRoute}
+                      highlightSelected={highlightSelected}
+                    />
+                  </>
+                )}
+
+                {outLocal.length > 0 && (
+                  <>
+                    <h3 className="subtitle" style={{ marginTop: 16 }}>Opciones secundarias (&gt; 60 min)</h3>
+                    <SectionList
+                      list={outLocal}
+                      origin={origin}
+                      setSelected={setSelected}
+                      ensureMap={ensureMap}
+                      placeOriginAndProviders={placeOriginAndProviders}
+                      drawRoute={drawRoute}
+                      highlightSelected={highlightSelected}
+                    />
+                  </>
+                )}
               </>
             )}
+          </section>
 
-            {outLocal.length > 0 && (
-              <>
-                <h3 className="subtitle" style={{ marginTop: 16 }}>Opciones secundarias (&gt; 60 min)</h3>
-                <SectionList
-                  list={outLocal}
-                  origin={origin}
-                  setSelected={setSelected}
-                  ensureMap={ensureMap}
-                  placeOriginAndProviders={placeOriginAndProviders}
-                  drawRoute={drawRoute}
-                  highlightSelected={highlightSelected}
-                  scrollToMap={scrollToMap}
-                />
-              </>
-            )}
-          </>
-        )}
-
-        {showMap && (
-          <div className="map-col" style={{ marginTop: results.length ? 12 : 0 }}>
-            <div ref={mapContainerRef} id="map" />
-            {selected && (
-              <div className="route-selected">
-                <strong>Ruta seleccionada:</strong>{" "}
-                {selected["Nombre de proveedor"] || "(Sin nombre)"} · {formatDuration(selected.duration_min)} · {selected.distance_km ?? "–"} km
-              </div>
-            )}
-          </div>
-        )}
+          {showMap && (
+            <aside className="mapPanel">
+              <div ref={mapContainerRef} id="map" />
+              {selected && (
+                <div className="route-selected">
+                  <strong>Ruta seleccionada:</strong>{" "}
+                  {selected["Nombre de proveedor"] || "(Sin nombre)"} · {formatDuration(selected.duration_min)} · {selected.distance_km ?? "–"} km
+                </div>
+              )}
+            </aside>
+          )}
+        </div>
       </div>
 
+      {/* === Estilos de página + Estilos globales de marcadores (están en el lugar correcto) === */}
       <style jsx>{`
         .page { padding: 16px; }
         .title { margin-bottom: 12px; }
@@ -563,8 +521,22 @@ export default function Home() {
         .time { text-align: right; }
         .mins { font-weight: 700; font-size: 18px; }
         .kms { color: #6b7280; font-size: 12px; }
-        .map-col { position: relative; }
-        #map { width: 100%; height: 520px; border: 1px solid #e5e7eb; border-radius: 12px; background: #f8fafc; }
+
+        /* Layout sticky */
+        .layout { display: grid; grid-template-columns: 1fr 520px; gap: 16px; align-items: start; }
+        .resultsCol { min-width: 0; }
+        .mapPanel {
+          position: sticky;
+          top: 16px;
+          height: calc(100vh - 32px);
+          border: 1px solid #e5e7eb;
+          border-radius: 12px;
+          overflow: hidden;
+          background: #f8fafc;
+          padding: 8px;
+          box-sizing: border-box;
+        }
+        #map { width: 100%; height: calc(100% - 40px); border-radius: 8px; }
         .route-selected { margin-top: 8px; font-size: 14px; }
         .addr-box { position: relative; }
         .sug-list {
@@ -575,8 +547,51 @@ export default function Home() {
         .sug-item { padding: 10px 12px; cursor: pointer; }
         .sug-item:hover { background: #f3f4f6; }
         .subtitle { margin: 10px 0 8px; }
+
         @media (max-width: 1100px) {
           .row { grid-template-columns: 1fr 1fr; }
+          .layout { grid-template-columns: 1fr; }
+          .mapPanel { display: none; }
+        }
+      `}</style>
+
+      <style jsx global>{`
+        .hex-marker-origin {
+          width: 16px;
+          height: 16px;
+          background: #2563eb;           /* azul */
+          border: 3px solid #ffffff;      /* aro blanco */
+          border-radius: 9999px;
+          position: relative;
+          box-shadow: 0 1px 6px rgba(0,0,0,.25);
+          transform: translate(-50%, -50%);
+        }
+        .hex-marker-origin::after {
+          content: '';
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: 16px;
+          height: 16px;
+          border-radius: 9999px;
+          transform: translate(-50%, -50%);
+          border: 3px solid rgba(37,99,235,.45);
+          animation: hex-pulse 1.6s ease-out infinite;
+        }
+        @keyframes hex-pulse {
+          0%   { transform: translate(-50%, -50%) scale(.6); opacity: .75; }
+          100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+        }
+
+        .hex-marker-provider {
+          width: 30px;
+          height: 30px;
+          transform: translate(-50%, -100%); /* ancla en la punta del pin */
+          filter: drop-shadow(0 1px 4px rgba(0,0,0,.35));
+        }
+
+        .hex-marker-provider svg {
+          display: block;
         }
       `}</style>
     </div>
@@ -592,7 +607,6 @@ function SectionList({
   placeOriginAndProviders,
   drawRoute,
   highlightSelected,
-  scrollToMap,
 }) {
   return (
     <div className="list">
@@ -627,8 +641,7 @@ function SectionList({
                   placeOriginAndProviders(origin, list);
                   highlightSelected(r);
                   await drawRoute(origin, r);
-                  setTimeout(() => document.getElementById("map")?.scrollIntoView({ behavior: "smooth" }), 50);
-                  scrollToMap();
+                  setTimeout(() => mapRef.current?.resize(), 50);
                 }}
               >
                 Ver en mapa
