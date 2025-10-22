@@ -33,89 +33,135 @@ export default function Home() {
   const [showMap, setShowMap] = useState(true);
   const [selected, setSelected] = useState(null);
 
-  // Map refs
-  const mapContainerRef = useRef(null);
-  const mapRef = useRef(null);
-  const markersRef = useRef([]);
-  const routeIdRef = useRef("active-route");
+  // Estado modal mobile
+  const [showMapModal, setShowMapModal] = useState(false);
+
+  // Mapbox refs
   const mapboxglRef = useRef(null);
+
+  // Desktop map
+  const mapDeskContainerRef = useRef(null);
+  const mapDeskRef = useRef(null);
+  const markersDeskRef = useRef([]);
+  const routeDeskId = "route-desktop";
+
+  // Mobile map (modal)
+  const mapMobContainerRef = useRef(null);
+  const mapMobRef = useRef(null);
+  const markersMobRef = useRef([]);
+  const routeMobId = "route-mobile";
 
   // Autocomplete
   const [suggestions, setSuggestions] = useState([]);
   const [showSug, setShowSug] = useState(false);
   const debounceRef = useRef(null);
 
-  /** ===== Marcadores ===== */
+  const isMobile = () =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 1100px)").matches;
 
-  const clearMarkers = () => {
-    markersRef.current.forEach((m) => m.remove());
-    markersRef.current = [];
+  /** ===== Helpers de marcadores/ruta por mapa ===== */
+  const clearMarkers = (mapKey = "desktop") => {
+    const ref = mapKey === "mobile" ? markersMobRef : markersDeskRef;
+    ref.current.forEach((m) => m.remove());
+    ref.current = [];
   };
 
-  // Icono SVG “doctor”
-  const doctorSvg = (size = 18, color = "#059669") => `
-    <svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="7" r="4" stroke="${color}" stroke-width="1.6"/>
-      <path d="M4 20c0-3.3 3.1-6 8-6s8 2.7 8 6" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
-      <path d="M12 9v4" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
-      <path d="M10 11h4" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
-    </svg>
-  `;
-
-  const makeMarkerEl = (size = 18, color = "#059669") => {
-    const el = document.createElement("div");
-    el.innerHTML = doctorSvg(size, color);
-    el.style.transform = "translate(-50%,-50%)";
-    el.style.display = "grid";
-    el.style.placeItems = "center";
-    el.style.width = `${size}px`;
-    el.style.height = `${size}px`;
-    return el;
-  };
-
-  const addMarker = ({ lng, lat }, { color = "#059669", popupHtml = "", size = 18 } = {}) => {
-    const mapboxgl = mapboxglRef.current;
-    if (!mapboxgl || !mapRef.current) return null;
+  const addMarker = (map, mapKey, { lng, lat }, { color = "#059669", popupHtml = "", size = 18 } = {}) => {
+    if (!map) return null;
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+    const mapboxgl = mapboxglRef.current;
+    if (!mapboxgl) return null;
 
-    const el = makeMarkerEl(size, color);
+    // Icono tipo "doctor" de alto contraste (pin azul con borde blanco)
+    const el = document.createElement("div");
+    el.className = "hex-marker-provider";
+    el.innerHTML = `
+      <svg width="${size+12}" height="${size+12}" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M15 0.75C8.515 0.75 3.25 6.016 3.25 12.5c0 7.99 9.317 15.57 11.12 16.97a1.5 1.5 0 0 0 1.86 0C17.94 28.07 27.25 20.49 27.25 12.5 27.25 6.016 21.985 0.75 15 0.75Z"
+          fill="#2563EB" stroke="#fff" stroke-width="2"/>
+        <circle cx="15" cy="11.5" r="3.2" fill="#fff"/>
+        <path d="M10.5 19.5c.9-2.4 3.05-3.7 4.5-3.7s3.6 1.3 4.5 3.7" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    `;
+
     const marker = new mapboxgl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([lng, lat]);
 
     if (popupHtml) {
-      marker.setPopup(
-        new mapboxgl.Popup({ offset: 20, closeButton: true }).setHTML(popupHtml)
-      );
+      marker.setPopup(new mapboxgl.Popup({ offset: 28, closeButton: true }).setHTML(popupHtml));
     }
 
-    marker.addTo(mapRef.current);
-    markersRef.current.push(marker);
+    marker.addTo(map);
+
+    const store = mapKey === "mobile" ? markersMobRef : markersDeskRef;
+    store.current.push(marker);
     return marker;
   };
 
-  const placeOriginAndProviders = (orig, providers) => {
+  const addOriginMarker = (map, mapKey, { lng, lat }) => {
+    if (!map) return null;
     const mapboxgl = mapboxglRef.current;
-    if (!mapboxgl || !mapRef.current) return;
+    if (!mapboxgl || !Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
-    clearMarkers();
+    const el = document.createElement("div");
+    el.className = "hex-marker-origin";
+    const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+      .setLngLat([lng, lat])
+      .setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML("<strong>Paciente</strong>"))
+      .addTo(map);
 
-    // Origen (paciente) – punto azul con borde blanco
-    if (orig?.lng && orig?.lat) {
-      const el = document.createElement("div");
-      el.style.width = "14px";
-      el.style.height = "14px";
-      el.style.borderRadius = "50%";
-      el.style.background = "#2563eb";
-      el.style.boxShadow = "0 0 0 2px #fff, 0 1px 6px rgba(0,0,0,.35)";
-      new mapboxgl.Marker({ element: el, anchor: "center" })
-        .setLngLat([orig.lng, orig.lat])
-        .setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML("<strong>Paciente</strong>"))
-        .addTo(mapRef.current);
+    const store = mapKey === "mobile" ? markersMobRef : markersDeskRef;
+    store.current.push(marker);
+    return marker;
+  };
+
+  const clearRoute = (map, routeId) => {
+    if (!map) return;
+    if (map.getSource(routeId)) {
+      if (map.getLayer(routeId)) map.removeLayer(routeId);
+      map.removeSource(routeId);
     }
+  };
+
+  const drawRoute = async (map, routeId, orig, dest) => {
+    if (!map || !orig || !dest) return;
+    try {
+      clearRoute(map, routeId);
+      const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${orig.lng},${orig.lat};${dest.lng},${dest.lat}?geometries=geojson&language=es&access_token=${token}`;
+      const data = await (await fetch(url)).json();
+      const coords = data?.routes?.[0]?.geometry?.coordinates || [];
+      if (!coords.length) return;
+
+      map.addSource(routeId, {
+        type: "geojson",
+        data: { type: "Feature", geometry: { type: "LineString", coordinates: coords } },
+      });
+
+      map.addLayer({
+        id: routeId,
+        type: "line",
+        source: routeId,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#0ea5e9", "line-width": 5 },
+      });
+
+      const b = new mapboxglRef.current.LngLatBounds();
+      coords.forEach((c) => b.extend(c));
+      map.fitBounds(b, { padding: 80, duration: 600 });
+    } catch (e) {
+      console.error("drawRoute error", e);
+    }
+  };
+
+  const placeOriginAndProviders = (map, mapKey, orig, providers) => {
+    if (!map) return;
+    clearMarkers(mapKey);
+
+    if (orig?.lng && orig?.lat) addOriginMarker(map, mapKey, orig);
 
     (providers || []).forEach((p) => {
-      addMarker({ lng: p.lng, lat: p.lat }, {
-        color: "#059669",
+      addMarker(map, mapKey, { lng: p.lng, lat: p.lat }, {
         size: 18,
         popupHtml: `
           <div style="min-width:240px">
@@ -124,79 +170,66 @@ export default function Home() {
             ${p.profesion || ""}${p.especialidad ? ` | <em>${p.especialidad}</em>` : ""}<br/>
             ${formatDuration(p.duration_min)} · ${p.distance_km ?? "–"} km
           </div>
-        `
+        `,
       });
     });
 
-    const bounds = new mapboxgl.LngLatBounds();
+    const bounds = new mapboxglRef.current.LngLatBounds();
     if (orig?.lng && orig?.lat) bounds.extend([orig.lng, orig.lat]);
-    (providers || []).forEach((p) => {
-      if (p?.lng && p?.lat) bounds.extend([p.lng, p.lat]);
-    });
-    if (!bounds.isEmpty()) {
-      mapRef.current.fitBounds(bounds, { padding: 80, duration: 500 });
-    }
+    (providers || []).forEach((p) => { if (p?.lng && p?.lat) bounds.extend([p.lng, p.lat]); });
+    if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 80, duration: 500 });
   };
 
-  const highlightSelected = (prov) => {
+  const highlightSelected = (map, mapKey, prov) => {
     if (!prov?.lng || !prov?.lat) return;
-    addMarker({ lng: prov.lng, lat: prov.lat }, {
-      color: "#0ea5e9",
-      size: 24, // marcador más grande para el seleccionado
+    addMarker(map, mapKey, { lng: prov.lng, lat: prov.lat }, {
+      size: 26,
       popupHtml: `
         <div style="min-width:260px">
           <strong>${prov["Nombre de proveedor"] || "Proveedor"}</strong><br/>
           ${prov.direccion || ""}<br/>
           ${prov.profesion || ""}${prov.especialidad ? ` | <em>${prov.especialidad}</em>` : ""}<br/>
           ${formatDuration(prov.duration_min)} · ${prov.distance_km ?? "–"} km
-        </div>`
+        </div>
+      `,
     });
   };
 
-  /** ===== Ruta (origen -> seleccionado) ===== */
-  const clearRoute = () => {
-    if (!mapRef.current) return;
-    if (mapRef.current.getSource(routeIdRef.current)) {
-      mapRef.current.removeLayer(routeIdRef.current);
-      mapRef.current.removeSource(routeIdRef.current);
-    }
+  /** ===== Inicialización de mapas ===== */
+  const ensureMapbox = async () => {
+    if (mapboxglRef.current) return;
+    const mapboxgl = (await import("mapbox-gl")).default;
+    mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    mapboxglRef.current = mapboxgl;
   };
 
-  const drawRoute = async (orig, dest) => {
-    const mapboxgl = mapboxglRef.current;
-    if (!mapboxgl || !mapRef.current) return;
-    try {
-      clearRoute();
-      if (!orig || !dest) return;
+  const ensureDesktopMap = async () => {
+    if (!showMap) setShowMap(true);
+    await ensureMapbox();
+    if (mapDeskRef.current) return;
 
-      const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${orig.lng},${orig.lat};${dest.lng},${dest.lat}?geometries=geojson&language=es&access_token=${token}`;
-      const data = await (await fetch(url)).json();
-      const coords = data?.routes?.[0]?.geometry?.coordinates || [];
-      if (!coords.length) return;
+    mapDeskRef.current = new mapboxglRef.current.Map({
+      container: mapDeskContainerRef.current,
+      style: "mapbox://styles/mapbox/streets-v11",
+      center: [-99.168, 19.39],
+      zoom: 11,
+    });
+    mapDeskRef.current.addControl(new mapboxglRef.current.NavigationControl(), "top-right");
+    setTimeout(() => mapDeskRef.current?.resize(), 60);
+  };
 
-      mapRef.current.addSource(routeIdRef.current, {
-        type: "geojson",
-        data: {
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: coords },
-        },
-      });
+  const ensureMobileMap = async () => {
+    await ensureMapbox();
+    if (mapMobRef.current) return;
 
-      mapRef.current.addLayer({
-        id: routeIdRef.current,
-        type: "line",
-        source: routeIdRef.current,
-        layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#0ea5e9", "line-width": 5 },
-      });
-
-      const b = new mapboxgl.LngLatBounds();
-      coords.forEach((c) => b.extend(c));
-      mapRef.current.fitBounds(b, { padding: 80, duration: 600 });
-    } catch (e) {
-      console.error("drawRoute error", e);
-    }
+    mapMobRef.current = new mapboxglRef.current.Map({
+      container: mapMobContainerRef.current,
+      style: "mapbox://styles/mapbox/streets-v11",
+      center: [-99.168, 19.39],
+      zoom: 11,
+    });
+    mapMobRef.current.addControl(new mapboxglRef.current.NavigationControl(), "top-right");
+    setTimeout(() => mapMobRef.current?.resize(), 60);
   };
 
   /** ===== Facets ===== */
@@ -208,7 +241,7 @@ export default function Home() {
       setProfessions(data.professions || []);
       setSpecialties(data.specialties || []);
       setSubSpecialties(data.subSpecialties || []);
-      setCampaigns((data.campaigns || []).filter((c) => (c || "").toLowerCase() === "mutuus" ? "Mutuus" : c));
+      setCampaigns((data.campaigns || []).map((c) => (String(c).toLowerCase() === "mutus" ? "Mutuus" : c)));
     } catch (e) {
       console.error("facets error", e);
     }
@@ -236,10 +269,11 @@ export default function Home() {
       setOrigin(data.origin || null);
       setResults(Array.isArray(data.results) ? data.results : []);
 
-      if (showMap && data.origin && Array.isArray(data.results)) {
-        await ensureMap();
-        placeOriginAndProviders(data.origin, data.results);
-        setTimeout(() => mapRef.current?.resize(), 50);
+      // pre-render mapa de escritorio si está visible
+      if (!isMobile() && showMap && data.origin && Array.isArray(data.results)) {
+        await ensureDesktopMap();
+        placeOriginAndProviders(mapDeskRef.current, "desktop", data.origin, data.results);
+        setTimeout(() => mapDeskRef.current?.resize(), 50);
       }
     } catch (e) {
       console.error(e);
@@ -257,8 +291,10 @@ export default function Home() {
     setSelectedCampaigns([]);
     setResults([]);
     setSelected(null);
-    clearMarkers();
-    clearRoute();
+    clearMarkers("desktop");
+    clearMarkers("mobile");
+    clearRoute(mapDeskRef.current, routeDeskId);
+    clearRoute(mapMobRef.current, routeMobId);
   };
 
   const toggleCampaign = (c) => {
@@ -273,36 +309,6 @@ export default function Home() {
       setProfession("");
     }
   }, [type]);
-
-  /** ===== Inicializa Mapa (lazy) ===== */
-  const ensureMap = async () => {
-    if (!showMap) setShowMap(true);
-    if (mapRef.current) return; // ya existe
-    if (typeof window === "undefined") return;
-
-    try {
-      const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-      if (!token) {
-        console.error("Falta NEXT_PUBLIC_MAPBOX_TOKEN");
-        return;
-      }
-      const mapboxgl = (await import("mapbox-gl")).default;
-      mapboxgl.accessToken = token;
-      mapboxglRef.current = mapboxgl;
-
-      mapRef.current = new mapboxgl.Map({
-        container: mapContainerRef.current,
-        style: "mapbox://styles/mapbox/streets-v11",
-        center: [-99.168, 19.39],
-        zoom: 11,
-      });
-
-      mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
-      setTimeout(() => mapRef.current?.resize(), 50);
-    } catch (e) {
-      console.error("Error inicializando Mapbox:", e);
-    }
-  };
 
   useEffect(() => {
     loadFacets();
@@ -347,6 +353,28 @@ export default function Home() {
   /** ===== Agrupación por tiempo ===== */
   const inLocal = results.filter((r) => (r?.duration_min ?? 9999) <= 60);
   const outLocal = results.filter((r) => (r?.duration_min ?? 9999) > 60);
+
+  /** ===== Acción “Ver en mapa” adaptada a desktop/mobile ===== */
+  const openOnMap = async (prov, list) => {
+    setSelected(prov);
+
+    if (isMobile()) {
+      // MOBILE → modal y mapa móvil
+      setShowMapModal(true);
+      await ensureMobileMap();
+      placeOriginAndProviders(mapMobRef.current, "mobile", origin, list);
+      highlightSelected(mapMobRef.current, "mobile", prov);
+      await drawRoute(mapMobRef.current, routeMobId, origin, prov);
+      setTimeout(() => mapMobRef.current?.resize(), 80);
+    } else {
+      // DESKTOP → panel sticky
+      await ensureDesktopMap();
+      placeOriginAndProviders(mapDeskRef.current, "desktop", origin, list);
+      highlightSelected(mapDeskRef.current, "desktop", prov);
+      await drawRoute(mapDeskRef.current, routeDeskId, origin, prov);
+      setTimeout(() => mapDeskRef.current?.resize(), 80);
+    }
+  };
 
   return (
     <div className="page">
@@ -445,7 +473,11 @@ export default function Home() {
               {loading ? "Buscando..." : "Buscar"}
             </button>
             <button onClick={handleReset}>Reiniciar filtros</button>
-            <button onClick={() => { setShowMap((v) => !v); setTimeout(() => mapRef.current?.resize(), 50); }}>
+            <button onClick={async () => {
+              setShowMap((v) => !v);
+              await ensureDesktopMap();
+              setTimeout(() => mapDeskRef.current?.resize(), 50);
+            }}>
               {showMap ? "Ocultar mapa" : "Mostrar mapa"}
             </button>
           </div>
@@ -456,32 +488,26 @@ export default function Home() {
           <section className="resultsCol">
             {results.length > 0 && (
               <>
+                {/* En la localidad */}
                 {inLocal.length > 0 && (
                   <>
                     <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
                     <SectionList
                       list={inLocal}
                       origin={origin}
-                      setSelected={setSelected}
-                      ensureMap={ensureMap}
-                      placeOriginAndProviders={placeOriginAndProviders}
-                      drawRoute={drawRoute}
-                      highlightSelected={highlightSelected}
+                      openOnMap={openOnMap}
                     />
                   </>
                 )}
 
+                {/* Opciones secundarias */}
                 {outLocal.length > 0 && (
                   <>
                     <h3 className="subtitle" style={{ marginTop: 16 }}>Opciones secundarias (&gt; 60 min)</h3>
                     <SectionList
                       list={outLocal}
                       origin={origin}
-                      setSelected={setSelected}
-                      ensureMap={ensureMap}
-                      placeOriginAndProviders={placeOriginAndProviders}
-                      drawRoute={drawRoute}
-                      highlightSelected={highlightSelected}
+                      openOnMap={openOnMap}
                     />
                   </>
                 )}
@@ -491,7 +517,7 @@ export default function Home() {
 
           {showMap && (
             <aside className="mapPanel">
-              <div ref={mapContainerRef} id="map" />
+              <div ref={mapDeskContainerRef} id="mapDesktop" />
               {selected && (
                 <div className="route-selected">
                   <strong>Ruta seleccionada:</strong>{" "}
@@ -503,7 +529,19 @@ export default function Home() {
         </div>
       </div>
 
-      {/* === Estilos de página + Estilos globales de marcadores (están en el lugar correcto) === */}
+      {/* MODAL MAPA (mobile) */}
+      {showMapModal && (
+        <div className="hexModal" role="dialog" aria-modal="true">
+          <div className="hexModal__bar">
+            <button className="hexModal__close" onClick={() => setShowMapModal(false)}>Cerrar</button>
+          </div>
+          <div className="hexModal__body">
+            <div ref={mapMobContainerRef} id="mapMobile" />
+          </div>
+        </div>
+      )}
+
+      {/* === Estilos de página + Estilos globales de marcadores === */}
       <style jsx>{`
         .page { padding: 16px; }
         .title { margin-bottom: 12px; }
@@ -536,7 +574,7 @@ export default function Home() {
           padding: 8px;
           box-sizing: border-box;
         }
-        #map { width: 100%; height: calc(100% - 40px); border-radius: 8px; }
+        #mapDesktop { width: 100%; height: calc(100% - 40px); border-radius: 8px; }
         .route-selected { margin-top: 8px; font-size: 14px; }
         .addr-box { position: relative; }
         .sug-list {
@@ -548,10 +586,37 @@ export default function Home() {
         .sug-item:hover { background: #f3f4f6; }
         .subtitle { margin: 10px 0 8px; }
 
+        /* Modal mobile */
         @media (max-width: 1100px) {
-          .row { grid-template-columns: 1fr 1fr; }
           .layout { grid-template-columns: 1fr; }
           .mapPanel { display: none; }
+
+          .hexModal {
+            position: fixed;
+            inset: 0;
+            background: #fff;
+            z-index: 1000;
+            display: grid;
+            grid-template-rows: auto 1fr;
+          }
+          .hexModal__bar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e5e7eb;
+            background: #fff;
+          }
+          .hexModal__close {
+            appearance: none;
+            border: 1px solid #cbd5e1;
+            background: #fff;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-weight: 600;
+          }
+          .hexModal__body { position: relative; }
+          #mapMobile { position: absolute; inset: 0; }
         }
       `}</style>
 
@@ -559,8 +624,8 @@ export default function Home() {
         .hex-marker-origin {
           width: 16px;
           height: 16px;
-          background: #2563eb;           /* azul */
-          border: 3px solid #ffffff;      /* aro blanco */
+          background: #2563eb;
+          border: 3px solid #ffffff;
           border-radius: 9999px;
           position: relative;
           box-shadow: 0 1px 6px rgba(0,0,0,.25);
@@ -579,35 +644,24 @@ export default function Home() {
           animation: hex-pulse 1.6s ease-out infinite;
         }
         @keyframes hex-pulse {
-          0%   { transform: translate(-50%, -50%) scale(.6); opacity: .75; }
+          0% { transform: translate(-50%, -50%) scale(.6); opacity: .75; }
           100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
         }
 
         .hex-marker-provider {
           width: 30px;
           height: 30px;
-          transform: translate(-50%, -100%); /* ancla en la punta del pin */
+          transform: translate(-50%, -100%);
           filter: drop-shadow(0 1px 4px rgba(0,0,0,.35));
         }
-
-        .hex-marker-provider svg {
-          display: block;
-        }
+        .hex-marker-provider svg { display: block; }
       `}</style>
     </div>
   );
 }
 
-/** ===== Componente de lista (reutilizable para ambas secciones) ===== */
-function SectionList({
-  list,
-  origin,
-  setSelected,
-  ensureMap,
-  placeOriginAndProviders,
-  drawRoute,
-  highlightSelected,
-}) {
+/** ===== Lista de resultados ===== */
+function SectionList({ list, origin, openOnMap }) {
   return (
     <div className="list">
       {list.map((r) => (
@@ -634,18 +688,7 @@ function SectionList({
               <div className="kms">{r.distance_km ?? "–"} km</div>
             </div>
             <div className="buttons">
-              <button
-                onClick={async () => {
-                  setSelected(r);
-                  await ensureMap();
-                  placeOriginAndProviders(origin, list);
-                  highlightSelected(r);
-                  await drawRoute(origin, r);
-                  setTimeout(() => mapRef.current?.resize(), 50);
-                }}
-              >
-                Ver en mapa
-              </button>
+              <button onClick={() => openOnMap(r, list)}>Ver en mapa</button>
               <button
                 onClick={() => {
                   const text = `${r["Nombre de proveedor"] || ""}\n${r.direccion || ""}\n${formatDuration(r.duration_min)} · ${r.distance_km ?? "–"} km\n${r.telefono || ""}`;
