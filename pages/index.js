@@ -1,5 +1,16 @@
 // pages/index.js
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Head from "next/head";
+import { useRouter } from "next/router";
+
+// === Redirección a selector si no hay ?campaign ===
+export async function getServerSideProps(ctx) {
+  const hasCampaign = typeof ctx.query?.campaign === "string" && ctx.query.campaign.trim() !== "";
+  if (!hasCampaign) {
+    return { redirect: { destination: "/select-campaign", permanent: false } };
+  }
+  return { props: {} };
+}
 
 /** ===== Utilidades ===== */
 const formatDuration = (min) => {
@@ -13,7 +24,13 @@ const formatDuration = (min) => {
 };
 
 export default function Home() {
-  // UI
+  const router = useRouter();
+  const campaign = useMemo(
+    () => (typeof router.query?.campaign === "string" ? router.query.campaign : ""),
+    [router.query?.campaign]
+  );
+
+  // UI state
   const [address, setAddress] = useState("");
   const [types, setTypes] = useState([]);
   const [professions, setProfessions] = useState([]);
@@ -27,8 +44,6 @@ export default function Home() {
   const [subSpecialty, setSubSpecialty] = useState("");
   const [selectedCampaigns, setSelectedCampaigns] = useState([]);
 
-  const [campaignFromQuery, setCampaignFromQuery] = useState("");
-
   // Resultados
   const [origin, setOrigin] = useState(null);
   const [results, setResults] = useState([]);
@@ -36,11 +51,11 @@ export default function Home() {
   const [showMap, setShowMap] = useState(true);
   const [selected, setSelected] = useState(null);
 
-  // Map
+  // Map refs
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
-  const providersMarkersRef = useRef([]);
-  const staticMarkersRef = useRef([]);
+  const markersRef = useRef([]);
+  const storeMarkersRef = useRef([]);
   const routeIdRef = useRef("active-route");
   const mapboxglRef = useRef(null);
 
@@ -49,16 +64,17 @@ export default function Home() {
   const [showSug, setShowSug] = useState(false);
   const debounceRef = useRef(null);
 
-  /** ===== Marcadores ===== */
-  const clearProvidersMarkers = () => {
-    providersMarkersRef.current.forEach((m) => m.remove());
-    providersMarkersRef.current = [];
+  /** ===== Marcadores genéricos ===== */
+  const clearMarkers = () => {
+    markersRef.current.forEach((m) => m.remove());
+    markersRef.current = [];
   };
-  const clearStaticMarkers = () => {
-    staticMarkersRef.current.forEach((m) => m.remove());
-    staticMarkersRef.current = [];
+  const clearStoreMarkers = () => {
+    storeMarkersRef.current.forEach((m) => m.remove());
+    storeMarkersRef.current = [];
   };
 
+  // SVGs
   const doctorSvg = (size = 18, color = "#059669") => `
     <svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
       <circle cx="12" cy="7" r="4" stroke="${color}" stroke-width="1.6"/>
@@ -67,35 +83,52 @@ export default function Home() {
       <path d="M10 11h4" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
     </svg>
   `;
-  const storeSvg = (size = 26, color = "#0ea5e9") => `
+  // Tiendas Liverpool (morado #721390)
+  const storeSvg = (size = 26, color = "#721390") => `
     <svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M3 10l2-5h14l2 5" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/>
       <path d="M4 10h16v9H4z" stroke="${color}" stroke-width="1.6" />
       <path d="M8 14h4" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
     </svg>
   `;
-  const makeEl = (svg) => {
+
+  const makeDivMarker = (html, { w = 28, h = 28, anchorCenter = true } = {}) => {
     const el = document.createElement("div");
-    el.innerHTML = svg;
-    el.style.transform = "translate(-50%,-50%)";
+    el.innerHTML = html;
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
     el.style.display = "grid";
     el.style.placeItems = "center";
+    el.style.transform = anchorCenter ? "translate(-50%,-50%)" : "translate(-50%,-100%)";
     return el;
   };
 
-  const addMarker = ({ lng, lat }, { svg, popupHtml, collection }) => {
+  const addProviderMarker = ({ lng, lat }, { color = "#059669", popupHtml = "", size = 18 } = {}) => {
     const mapboxgl = mapboxglRef.current;
     if (!mapboxgl || !mapRef.current) return null;
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
-    const el = makeEl(svg);
-    const marker = new mapboxgl.Marker({ element: el, anchor: "bottom" })
-      .setLngLat([lng, lat]);
-    if (popupHtml) {
-      marker.setPopup(new mapboxgl.Popup({ offset: 22 }).setHTML(popupHtml));
-    }
+
+    const el = makeDivMarker(doctorSvg(size, color), { w: size, h: size });
+    const marker = new mapboxgl.Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]);
+    if (popupHtml) marker.setPopup(new mapboxgl.Popup({ offset: 20 }).setHTML(popupHtml));
     marker.addTo(mapRef.current);
-    if (collection === "static") staticMarkersRef.current.push(marker);
-    else providersMarkersRef.current.push(marker);
+    markersRef.current.push(marker);
+    return marker;
+  };
+
+  const addStoreMarker = ({ lng, lat, title, address }) => {
+    const mapboxgl = mapboxglRef.current;
+    if (!mapboxgl || !mapRef.current) return null;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+
+    const el = makeDivMarker(storeSvg(26, "#721390"), { w: 28, h: 28 });
+    const marker = new mapboxgl.Marker({ element: el, anchor: "bottom" })
+      .setLngLat([lng, lat])
+      .setPopup(new mapboxgl.Popup({ offset: 20 }).setHTML(`
+        <div style="min-width:240px"><strong>${title || "Tienda"}</strong><br/>${address || ""}</div>
+      `));
+    marker.addTo(mapRef.current);
+    storeMarkersRef.current.push(marker);
     return marker;
   };
 
@@ -103,8 +136,9 @@ export default function Home() {
     const mapboxgl = mapboxglRef.current;
     if (!mapboxgl || !mapRef.current) return;
 
-    clearProvidersMarkers();
+    clearMarkers();
 
+    // Origen (paciente) — pin azul
     if (orig?.lng && orig?.lat) {
       const el = document.createElement("div");
       el.style.width = "14px";
@@ -119,21 +153,18 @@ export default function Home() {
     }
 
     (providers || []).forEach((p) => {
-      addMarker(
-        { lng: p.lng, lat: p.lat },
-        {
-          svg: doctorSvg(18, "#059669"),
-          collection: "providers",
-          popupHtml: `
-            <div style="min-width:240px">
-              <strong>${p["Nombre de proveedor"] || "Proveedor"}</strong><br/>
-              ${p.direccion || ""}<br/>
-              ${p.profesion || ""}${p.especialidad ? ` | <em>${p.especialidad}</em>` : ""}<br/>
-              ${formatDuration(p.duration_min)} · ${p.distance_km ?? "–"} km
-            </div>
-          `,
-        }
-      );
+      addProviderMarker({ lng: p.lng, lat: p.lat }, {
+        color: "#059669",
+        size: 18,
+        popupHtml: `
+          <div style="min-width:240px">
+            <strong>${p["Nombre de proveedor"] || "Proveedor"}</strong><br/>
+            ${p.direccion || ""}<br/>
+            ${p.profesion || ""}${p.especialidad ? ` | <em>${p.especialidad}</em>` : ""}<br/>
+            ${formatDuration(p.duration_min)} · ${p.distance_km ?? "–"} km
+          </div>
+        `
+      });
     });
 
     const bounds = new mapboxgl.LngLatBounds();
@@ -141,31 +172,24 @@ export default function Home() {
     (providers || []).forEach((p) => {
       if (p?.lng && p?.lat) bounds.extend([p.lng, p.lat]);
     });
-    if (!bounds.isEmpty()) {
-      mapRef.current.fitBounds(bounds, { padding: 80, duration: 500 });
-    }
+    if (!bounds.isEmpty()) mapRef.current.fitBounds(bounds, { padding: 80, duration: 500 });
   };
 
-  const highlightSelected = (p) => {
-    if (!p?.lng || !p?.lat) return;
-    addMarker(
-      { lng: p.lng, lat: p.lat },
-      {
-        svg: doctorSvg(24, "#0ea5e9"),
-        collection: "providers",
-        popupHtml: `
-          <div style="min-width:260px">
-            <strong>${p["Nombre de proveedor"] || "Proveedor"}</strong><br/>
-            ${p.direccion || ""}<br/>
-            ${p.profesion || ""}${p.especialidad ? ` | <em>${p.especialidad}</em>` : ""}<br/>
-            ${formatDuration(p.duration_min)} · ${p.distance_km ?? "–"} km
-          </div>
-        `,
-      }
-    );
+  const highlightSelected = (prov) => {
+    if (!prov?.lng || !prov?.lat) return;
+    addProviderMarker({ lng: prov.lng, lat: prov.lat }, {
+      color: "#0ea5e9", size: 24,
+      popupHtml: `
+        <div style="min-width:260px">
+          <strong>${prov["Nombre de proveedor"] || "Proveedor"}</strong><br/>
+          ${prov.direccion || ""}<br/>
+          ${prov.profesion || ""}${prov.especialidad ? ` | <em>${prov.especialidad}</em>` : ""}<br/>
+          ${formatDuration(prov.duration_min)} · ${prov.distance_km ?? "–"} km
+        </div>`
+    });
   };
 
-  /** ===== Ruta ===== */
+  /** ===== Ruta (origen -> seleccionado) ===== */
   const clearRoute = () => {
     if (!mapRef.current) return;
     if (mapRef.current.getSource(routeIdRef.current)) {
@@ -211,13 +235,13 @@ export default function Home() {
   /** ===== Facets ===== */
   const loadFacets = async () => {
     try {
-      const r = await fetch("/api/facets");
-      const d = await r.json();
-      setTypes(d.types || []);
-      setProfessions(d.professions || []);
-      setSpecialties(d.specialties || []);
-      setSubSpecialties(d.subSpecialties || []);
-      setCampaigns((d.campaigns || []).map((c) => (String(c).toLowerCase() === "mutuus" ? "Mutuus" : c)));
+      const res = await fetch("/api/facets");
+      const data = await res.json();
+      setTypes(data.types || []);
+      setProfessions(data.professions || []);
+      setSpecialties(data.specialties || []);
+      setSubSpecialties(data.subSpecialties || []);
+      setCampaigns((data.campaigns || []).map((c) => (String(c).toLowerCase() === "mutuus" ? "Mutuus" : c)));
     } catch (e) {
       console.error("facets error", e);
     }
@@ -231,13 +255,8 @@ export default function Home() {
     setShowSug(false);
     try {
       const params = new URLSearchParams({
-        address,
-        type,
-        profession,
-        specialty,
-        subSpecialty,
-        campaigns: selectedCampaigns.join(","),
-        limit: "50",
+        address, type, profession, specialty, subSpecialty,
+        campaigns: selectedCampaigns.join(","), limit: "50",
       });
       const res = await fetch(`/api/providers?${params.toString()}`);
       const data = await res.json();
@@ -246,7 +265,7 @@ export default function Home() {
       setResults(Array.isArray(data.results) ? data.results : []);
 
       if (showMap && data.origin && Array.isArray(data.results)) {
-        await ensureMap(true);
+        await ensureMap();
         placeOriginAndProviders(data.origin, data.results);
         setTimeout(() => mapRef.current?.resize(), 50);
       }
@@ -257,84 +276,65 @@ export default function Home() {
     }
   };
 
-  /** ===== Reset ===== */
+  /** ===== Reiniciar ===== */
   const handleReset = () => {
-    setType("");
-    setProfession("");
-    setSpecialty("");
-    setSubSpecialty("");
-    setSelectedCampaigns([]);
-    setResults([]);
-    setSelected(null);
-    clearProvidersMarkers();
-    clearRoute();
+    setType(""); setProfession(""); setSpecialty(""); setSubSpecialty("");
+    setSelectedCampaigns([]); setResults([]); setSelected(null);
+    clearMarkers(); clearRoute();
   };
 
   const toggleCampaign = (c) => {
-    setSelectedCampaigns((prev) =>
-      prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]
-    );
+    setSelectedCampaigns((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]);
   };
 
+  // Si eligen Especialista/Sub, bloquea Profesión
   useEffect(() => {
     if (["especialista", "subespecialista", "sub-especialista"].includes((type || "").toLowerCase())) {
       setProfession("");
     }
   }, [type]);
 
-  /** ===== Map init ===== */
-  const ensureMap = async (force = false) => {
+  /** ===== Inicializa Mapa (lazy) ===== */
+  const ensureMap = async () => {
     if (!showMap) setShowMap(true);
-    if (mapRef.current && !force) return;
+    if (mapRef.current) return;
     if (typeof window === "undefined") return;
+
     try {
       const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      if (!token) { console.error("Falta NEXT_PUBLIC_MAPBOX_TOKEN"); return; }
       const mapboxgl = (await import("mapbox-gl")).default;
       mapboxgl.accessToken = token;
       mapboxglRef.current = mapboxgl;
 
-      if (mapRef.current?.remove) {
-        try { mapRef.current.remove(); } catch {}
-      }
       mapRef.current = new mapboxgl.Map({
         container: mapContainerRef.current,
         style: "mapbox://styles/mapbox/streets-v11",
         center: [-99.168, 19.39],
         zoom: 11,
       });
+
       mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
       setTimeout(() => mapRef.current?.resize(), 50);
     } catch (e) {
-      console.error("map init error:", e);
+      console.error("Error inicializando Mapbox:", e);
     }
   };
-
-  // campaign from query
-  useEffect(() => {
-    const q = new URLSearchParams(window.location.search);
-    const c = q.get("campaign") || "";
-    setCampaignFromQuery(c);
-    if (c && c.toLowerCase() !== "red general hexalud") {
-      setSelectedCampaigns([c]);
-    }
-  }, []);
-
-  useEffect(() => { loadFacets(); }, []);
 
   /** ===== Autocomplete ===== */
   const fetchSuggestions = async (q) => {
     try {
       const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
       if (!token || !q.trim()) { setSuggestions([]); return; }
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-        q
-      )}.json?autocomplete=true&limit=5&language=es&country=mx&access_token=${token}`;
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?autocomplete=true&limit=5&language=es&country=mx&access_token=${token}`;
       const data = await (await fetch(url)).json();
       const items = data?.features?.map((f) => ({
-        id: f.id, label: f.place_name_es || f.place_name
+        id: f.id, label: f.place_name_es || f.place_name,
       })) || [];
       setSuggestions(items); setShowSug(true);
-    } catch (e) { console.error("autocomplete", e); }
+    } catch (e) {
+      console.error("autocomplete error", e);
+    }
   };
   const onAddressChange = (v) => {
     setAddress(v); setShowSug(true);
@@ -343,185 +343,184 @@ export default function Home() {
   };
   const pickSuggestion = (s) => { setAddress(s.label); setShowSug(false); };
 
+  const scrollToMap = () => {
+    if (!mapContainerRef.current) return;
+    mapContainerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  /** ===== Agrupación <= 60 / > 60 ===== */
   const inLocal = results.filter((r) => (r?.duration_min ?? 9999) <= 60);
   const outLocal = results.filter((r) => (r?.duration_min ?? 9999) > 60);
 
-  /** ===== Pines estáticos (Liverpool) ===== */
+  /** ===== Cargar pines estáticos por campaña ===== */
   useEffect(() => {
-    const run = async () => {
-      if (campaignFromQuery.toLowerCase() !== "liverpool") {
-        clearStaticMarkers();
-        return;
-      }
+    (async () => {
+      if (!campaign) return;
       await ensureMap();
+      clearStoreMarkers();
       try {
-        const r = await fetch("/api/static-pins?campaign=Liverpool");
-        const j = await r.json();
-        clearStaticMarkers();
-        (j.pins || []).forEach((p) => {
-          addMarker(
-            { lng: p.lng, lat: p.lat },
-            {
-              svg: storeSvg(26, "#0ea5e9"),
-              collection: "static",
-              popupHtml: `<strong>${p.title || "Tienda"}</strong><br/>${p.address || ""}`,
-            }
-          );
-        });
+        const res = await fetch(`/api/static-pins?campaign=${encodeURIComponent(campaign)}`);
+        const data = await res.json();
+        const pins = Array.isArray(data?.pins) ? data.pins : [];
+        pins.forEach((p) => addStoreMarker(p));
       } catch (e) {
-        console.error("static pins", e);
+        console.error("static pins error", e);
       }
-    };
-    run();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignFromQuery, showMap]);
+  }, [campaign]);
+
+  /** ===== Cargar facets al inicio ===== */
+  useEffect(() => { loadFacets(); }, []);
 
   return (
-    <div className="page">
-      <div className="panel">
-        <div className="top-actions">
-          <a className="link" href="/select-campaign">← Elegir campaña</a>
-        </div>
+    <>
+      <Head><title>Buscador de Proveedores — Hexalud</title></Head>
 
-        <h1 className="title">Buscador de Proveedores — Hexalud</h1>
+      <div className="page">
+        <div className="panel">
+          <div className="camp-info">Campaña seleccionada: <strong>{campaign || "(sin campaña)"}</strong></div>
 
-        <div className="filters">
-          <div className="row">
-            <div className="col">
-              <label>Tipo de proveedor</label>
-              <select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="">(Todos)</option>
-                {types.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+          <h1 className="title">Buscador de Proveedores — Hexalud</h1>
+
+          <div className="filters">
+            <div className="row">
+              <div className="col">
+                <label>Tipo de proveedor</label>
+                <select value={type} onChange={(e) => setType(e.target.value)}>
+                  <option value="">(Todos)</option>
+                  {types.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+
+              <div className="col">
+                <label>Profesión</label>
+                <select
+                  value={profession}
+                  onChange={(e) => setProfession(e.target.value)}
+                  disabled={["especialista","subespecialista","sub-especialista"].includes((type || "").toLowerCase())}
+                >
+                  <option value="">(Todas)</option>
+                  {professions.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+
+              <div className="col">
+                <label>Especialidad</label>
+                <select value={specialty} onChange={(e) => setSpecialty(e.target.value)}>
+                  <option value="">(Seleccione Especialista/Sub)</option>
+                  {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              <div className="col">
+                <label>Sub-especialidad</label>
+                <select value={subSpecialty} onChange={(e) => setSubSpecialty(e.target.value)}>
+                  <option value="">(Seleccione Sub-especialista)</option>
+                  {subSpecialties.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
             </div>
 
-            <div className="col">
-              <label>Profesión</label>
-              <select
-                value={profession}
-                onChange={(e) => setProfession(e.target.value)}
-                disabled={["especialista", "subespecialista", "sub-especialista"].includes((type || "").toLowerCase())}
-              >
-                <option value="">(Todas)</option>
-                {professions.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+            <div className="row">
+              <label>Dirección del paciente</label>
+              <div className="addr-box">
+                <input
+                  value={address}
+                  onChange={(e) => onAddressChange(e.target.value)}
+                  placeholder="Ej. Durango 296, Roma Norte, Cuauhtémoc, CDMX"
+                  onFocus={() => address && setShowSug(true)}
+                />
+                {showSug && suggestions.length > 0 && (
+                  <div className="sug-list">
+                    {suggestions.map((s) => (
+                      <div className="sug-item" key={s.id} onMouseDown={() => pickSuggestion(s)}>
+                        {s.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="col">
-              <label>Especialidad</label>
-              <select value={specialty} onChange={(e) => setSpecialty(e.target.value)}>
-                <option value="">(Seleccione Especialista/Sub)</option>
-                {specialties.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
+            <div className="row chips">
+              {campaigns.map((c) => (
+                <button
+                  key={c}
+                  className={`chip ${selectedCampaigns.includes(c) ? "active" : ""}`}
+                  onClick={() => toggleCampaign(c)}
+                >
+                  {c}
+                </button>
+              ))}
+              <button className="chip" onClick={() => setSelectedCampaigns([])}>Sin asignación</button>
             </div>
 
-            <div className="col">
-              <label>Sub-especialidad</label>
-              <select value={subSpecialty} onChange={(e) => setSubSpecialty(e.target.value)}>
-                <option value="">(Seleccione Sub-especialista)</option>
-                {subSpecialties.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
+            <div className="row actions">
+              <button onClick={handleSearch} disabled={loading}>
+                {loading ? "Buscando..." : "Buscar"}
+              </button>
+              <button onClick={handleReset}>Reiniciar filtros</button>
+              <button onClick={() => { setShowMap((v) => !v); setTimeout(() => mapRef.current?.resize(), 50); }}>
+                {showMap ? "Ocultar mapa" : "Mostrar mapa"}
+              </button>
             </div>
           </div>
 
-          <div className="row">
-            <label>Dirección del paciente</label>
-            <div className="addr-box">
-              <input
-                value={address}
-                onChange={(e) => onAddressChange(e.target.value)}
-                placeholder="Ej. Durango 296, Roma Norte, Cuauhtémoc, CDMX"
-                onFocus={() => address && setShowSug(true)}
-              />
-              {showSug && suggestions.length > 0 && (
-                <div className="sug-list">
-                  {suggestions.map((s) => (
-                    <div key={s.id} className="sug-item" onMouseDown={() => pickSuggestion(s)}>
-                      {s.label}
-                    </div>
-                  ))}
+          {/* Resultados */}
+          {results.length > 0 && (
+            <>
+              {inLocal.length > 0 && (
+                <>
+                  <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
+                  <SectionList
+                    list={inLocal}
+                    origin={origin}
+                    setSelected={setSelected}
+                    ensureMap={ensureMap}
+                    placeOriginAndProviders={placeOriginAndProviders}
+                    drawRoute={drawRoute}
+                    highlightSelected={highlightSelected}
+                    scrollToMap={() => mapContainerRef.current?.scrollIntoView({ behavior: "smooth" })}
+                  />
+                </>
+              )}
+
+              {outLocal.length > 0 && (
+                <>
+                  <h3 className="subtitle" style={{ marginTop: 16 }}>Opciones secundarias (&gt; 60 min)</h3>
+                  <SectionList
+                    list={outLocal}
+                    origin={origin}
+                    setSelected={setSelected}
+                    ensureMap={ensureMap}
+                    placeOriginAndProviders={placeOriginAndProviders}
+                    drawRoute={drawRoute}
+                    highlightSelected={highlightSelected}
+                    scrollToMap={() => mapContainerRef.current?.scrollIntoView({ behavior: "smooth" })}
+                  />
+                </>
+              )}
+            </>
+          )}
+
+          {showMap && (
+            <div className="map-col" style={{ marginTop: results.length ? 12 : 0 }}>
+              <div ref={mapContainerRef} id="map" />
+              {selected && (
+                <div className="route-selected">
+                  <strong>Ruta seleccionada:</strong>{" "}
+                  {selected["Nombre de proveedor"] || "(Sin nombre)"} · {formatDuration(selected.duration_min)} · {selected.distance_km ?? "–"} km
                 </div>
               )}
             </div>
-          </div>
-
-          <div className="row chips">
-            {(campaigns.length ? campaigns : ["Liverpool", "MetLife", "Mutuus"]).map((c) => (
-              <button
-                key={c}
-                className={`chip ${selectedCampaigns.includes(c) ? "active" : ""}`}
-                onClick={() => toggleCampaign(c)}
-              >
-                {c}
-              </button>
-            ))}
-            <button className="chip" onClick={() => setSelectedCampaigns([])}>
-              Sin asignación
-            </button>
-          </div>
-
-          <div className="row actions">
-            <button onClick={handleSearch} disabled={loading}>
-              {loading ? "Buscando..." : "Buscar"}
-            </button>
-            <button onClick={handleReset}>Reiniciar filtros</button>
-            <button onClick={() => { setShowMap((v) => !v); setTimeout(() => mapRef.current?.resize(), 50); }}>
-              {showMap ? "Ocultar mapa" : "Mostrar mapa"}
-            </button>
-          </div>
+          )}
         </div>
-
-        {results.length > 0 && (
-          <>
-            {inLocal.length > 0 && (
-              <>
-                <h3 className="subtitle">En la localidad (≤ 60 min)</h3>
-                <SectionList
-                  list={inLocal}
-                  origin={origin}
-                  setSelected={setSelected}
-                  ensureMap={ensureMap}
-                  placeOriginAndProviders={placeOriginAndProviders}
-                  drawRoute={drawRoute}
-                  highlightSelected={highlightSelected}
-                />
-              </>
-            )}
-
-            {outLocal.length > 0 && (
-              <>
-                <h3 className="subtitle" style={{ marginTop: 16 }}>Opciones secundarias (&gt; 60 min)</h3>
-                <SectionList
-                  list={outLocal}
-                  origin={origin}
-                  setSelected={setSelected}
-                  ensureMap={ensureMap}
-                  placeOriginAndProviders={placeOriginAndProviders}
-                  drawRoute={drawRoute}
-                  highlightSelected={highlightSelected}
-                />
-              </>
-            )}
-          </>
-        )}
-
-        {showMap && (
-          <div className="map-col" style={{ marginTop: results.length ? 12 : 0 }}>
-            <div ref={mapContainerRef} id="map" />
-            {selected && (
-              <div className="route-selected">
-                <strong>Ruta seleccionada:</strong>{" "}
-                {selected["Nombre de proveedor"] || "(Sin nombre)"} · {formatDuration(selected.duration_min)} · {selected.distance_km ?? "–"} km
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       <style jsx>{`
         .page { padding: 16px; }
-        .top-actions { margin-bottom: 6px; }
-        .link { color: #2563eb; text-decoration: none; }
+        .camp-info { font-size: 14px; color: #374151; margin-bottom: 6px; }
         .title { margin-bottom: 12px; }
         .filters .row { display: grid; gap: 12px; margin-bottom: 10px; }
         .row { grid-template-columns: 1fr 1fr 1fr 1fr; }
@@ -549,40 +548,28 @@ export default function Home() {
         .sug-item { padding: 10px 12px; cursor: pointer; }
         .sug-item:hover { background: #f3f4f6; }
         .subtitle { margin: 10px 0 8px; }
-        @media (max-width: 1100px) {
-          .row { grid-template-columns: 1fr 1fr; }
-        }
+        @media (max-width: 1100px) { .row { grid-template-columns: 1fr 1fr; } }
       `}</style>
-    </div>
+    </>
   );
 }
 
-/** ===== Lista ===== */
+/** ===== Componente de lista para ambas secciones ===== */
 function SectionList({
-  list,
-  origin,
-  setSelected,
-  ensureMap,
-  placeOriginAndProviders,
-  drawRoute,
-  highlightSelected,
+  list, origin, setSelected, ensureMap, placeOriginAndProviders, drawRoute, highlightSelected, scrollToMap,
 }) {
   return (
     <div className="list">
       {list.map((r) => (
         <div key={r.id} className="card">
           <div className="card-body">
-            <div className="card-title">
-              <strong>{r["Nombre de proveedor"] || "(Sin nombre)"}</strong>
-            </div>
+            <div className="card-title"><strong>{r["Nombre de proveedor"] || "(Sin nombre)"}</strong></div>
             <div className="card-text">{r.direccion}</div>
             <div className="card-meta">
-              <span>Especialista</span> · {r.profesion || ""} {r.especialidad ? `| ${r.especialidad}` : "" }
+              <span>Especialista</span> · {r.profesion || ""} {r.especialidad ? `| ${r.especialidad}` : ""}
             </div>
-            <div className="card-meta">
-              {r.campañas && r.campañas.length ? `· ${r.campañas.join(", ")}` : "" }
-            </div>
-            <div className="card-meta">{r.telefono ? `· ${r.telefono}` : "" }</div>
+            <div className="card-meta">{r.campañas && r.campañas.length ? `· ${r.campañas.join(", ")}` : ""}</div>
+            <div className="card-meta">{r.telefono ? `· ${r.telefono}` : ""}</div>
           </div>
 
           <div className="card-aside">
@@ -594,23 +581,21 @@ function SectionList({
               <button
                 onClick={async () => {
                   setSelected(r);
-                  await ensureMap(true);
+                  await ensureMap();
                   placeOriginAndProviders(origin, list);
                   highlightSelected(r);
                   await drawRoute(origin, r);
                   setTimeout(() => document.getElementById("map")?.scrollIntoView({ behavior: "smooth" }), 50);
+                  scrollToMap();
                 }}
-              >
-                Ver en mapa
-              </button>
+              >Ver en mapa</button>
+
               <button
                 onClick={() => {
                   const text = `${r["Nombre de proveedor"] || ""}\n${r.direccion || ""}\n${formatDuration(r.duration_min)} · ${r.distance_km ?? "–"} km\n${r.telefono || ""}`;
                   navigator.clipboard.writeText(text);
                 }}
-              >
-                Copiar ficha
-              </button>
+              >Copiar ficha</button>
             </div>
           </div>
         </div>
