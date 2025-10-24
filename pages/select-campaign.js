@@ -1,36 +1,34 @@
 // pages/select-campaign.js
-import { useCallback } from "react";
+import Link from "next/link";
+import Head from "next/head";
 
 export default function SelectCampaign() {
-  const go = useCallback((c) => {
-    const map = {
-      liverpool: "Liverpool",
-      metlife: "MetLife",
-      mutuUS: "Mutuus",
-      general: "Red general Hexalud",
-    };
-    const value = map[c] || "Red general Hexalud";
-    window.location.href = `/?campaign=${encodeURIComponent(value)}`;
-  }, []);
-
   return (
-    <div className="wrap">
-      <header>
-        <h1>Buscador de Proveedores — Hexalud</h1>
-        <p className="subtitle">Selecciona la campaña o servicio para comenzar:</p>
-      </header>
+    <>
+      <Head>
+        <title>Buscador de Proveedores — Hexalud</title>
+      </Head>
 
-      <main className="chips">
-        <button className="chip" onClick={() => go("liverpool")}>Liverpool</button>
-        <button className="chip" onClick={() => go("metlife")}>MetLife</button>
-        <button className="chip" onClick={() => go("mutuUS")}>Mutuus</button>
-        <button className="chip" onClick={() => go("general")}>Red general Hexalud</button>
-      </main>
+      <div className="wrap">
+        <header>
+          <h1>Buscador de Proveedores — Hexalud</h1>
+          <p className="sub">Selecciona la campaña o servicio para comenzar:</p>
+        </header>
 
-      <footer>
-        {/* Cambia por tu logo en /public si quieres */}
-        <div className="logo">Hexalud</div>
-      </footer>
+        <main>
+          <div className="chips">
+            <Link href="/?campaign=Liverpool" className="chip">Liverpool</Link>
+            <Link href="/?campaign=MetLife" className="chip">MetLife</Link>
+            <Link href="/?campaign=Mutuus" className="chip">Mutuus</Link>
+            <Link href="/?campaign=General" className="chip outline">Red general Hexalud</Link>
+          </div>
+        </main>
+
+        <footer>
+          {/* Ajusta la ruta del logo si usas otra imagen */}
+          <img src="/hexalud-logo.svg" alt="Hexalud" />
+        </footer>
+      </div>
 
       <style jsx>{`
         .wrap {
@@ -38,37 +36,40 @@ export default function SelectCampaign() {
           display: grid;
           grid-template-rows: auto 1fr auto;
           gap: 24px;
-          padding: 28px 16px;
+          padding: 24px;
           max-width: 900px;
           margin: 0 auto;
         }
         header { text-align: center; }
-        h1 { margin: 0 0 8px; }
-        .subtitle { margin: 0; color: #666; }
+        h1 { margin: 10px 0 4px; }
+        .sub { color: #6b7280; margin: 0; }
         .chips {
-          display: grid;
-          grid-auto-rows: min-content;
-          gap: 14px;
-          align-content: center;
-          justify-items: center;
+          display: flex;
+          gap: 12px;
+          justify-content: center;
+          flex-wrap: wrap;
+          margin-top: 18px;
         }
         .chip {
-          padding: 12px 22px;
-          font-size: 18px;
-          border: 1px solid #e5e7eb;
+          padding: 12px 18px;
           border-radius: 999px;
-          background: #fff;
-          cursor: pointer;
+          background: #111827;
+          color: #fff;
+          text-decoration: none;
+          font-weight: 600;
+          transition: transform .08s ease, opacity .08s ease;
         }
-        .chip:hover { background: #f7f7f7; }
-        footer { display: grid; place-items: center; padding: 16px 0; }
-        .logo {
-          width: 160px; height: 48px;
-          display: grid; place-items: center;
-          border: 1px dashed #d1d5db; border-radius: 8px;
-          color: #10b981; font-weight: 700; background: #f9fffb;
+        .chip:hover { transform: translateY(-1px); opacity: .95; }
+        .chip.outline {
+          background: #fff; color: #111827; border: 1px solid #e5e7eb;
         }
+        footer {
+          display: grid;
+          place-items: center;
+          padding-bottom: 8px;
+        }
+        footer img { height: 40px; opacity: .9; }
       `}</style>
-    </div>
+    </>
   );
 }
