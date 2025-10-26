@@ -1,7 +1,0 @@
-<!-- /public/hexalud-logo.svg -->
-<svg width="160" height="40" viewBox="0 0 160 40" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hexalud">
-  <rect rx="8" width="160" height="40" fill="#0EA5A3"/>
-  <g fill="#ffffff" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto" font-weight="700" font-size="18">
-    <text x="16"  y="26">Hexalud</text>
-  </g>
-</svg>
