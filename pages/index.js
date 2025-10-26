@@ -347,7 +347,7 @@ export default function Home() {
   /* =========================================================
      RENDER
   ========================================================= */
-  if (showCampaignPicker) {
+ if (showCampaignPicker) {
     return (
       <div style={{ padding: 24, minHeight: "100vh", display: "grid", gridTemplateRows: "auto 1fr auto", gap: 12 }}>
         <h1 style={{ textAlign: "center" }}>Buscador de Proveedores — Hexalud</h1>
