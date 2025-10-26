@@ -1,101 +1,99 @@
 // pages/api/static-pins.js
+// Lee tiendas desde Airtable (base y tabla de tiendas Suburbia) y geocodifica (si fuera necesario).
+// Requiere en Vercel:
+//  - AIRTABLE_API_KEY
+//  - AIRTABLE_BASE_ID_STORES
+//  - AIRTABLE_TABLE_STORES
+//  - NEXT_PUBLIC_MAPBOX_TOKEN
+
 import Airtable from "airtable";
-
-const HEX_PURPLE = "#721390";
-
-// Une piezas de dirección, removiendo vacíos y prefijos “CP.”
-function buildAddress(rec) {
-  const get = (f) => (rec.get(f) || "").toString().trim();
-  const calle = get("CALLE");
-  const ext = get("Exterior");
-  const col = get("COLONIA");
-  const cpRaw = get("CP");
-  const cp = cpRaw.replace(/^CP\.\s*/i, ""); // quita “CP.” si viene
-  const loc = get("Localidad");
-  const edo = get("Estado");
-
-  // Variantes con/sin CP
-  const seg1 = [calle, ext].filter(Boolean).join(" ");
-  const seg2 = [col, cp].filter(Boolean).join(", ");
-  const seg3 = [loc, edo].filter(Boolean).join(", ");
-
-  return [seg1, seg2, seg3].filter(Boolean).join(", ");
-}
-
-async function geocode(address) {
-  const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-  if (!token || !address) return null;
-  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-    address
-  )}.json?autocomplete=false&limit=1&language=es&country=mx&access_token=${token}`;
-
-  const data = await (await fetch(url)).json();
-  const feat = data?.features?.[0];
-  const [lng, lat] = feat?.center || [];
-  if (typeof lng === "number" && typeof lat === "number") {
-    return { lng, lat };
-  }
-  return null;
-}
 
 export default async function handler(req, res) {
   try {
     const baseId = process.env.AIRTABLE_BASE_ID_STORES;
     const tableName = process.env.AIRTABLE_TABLE_STORES;
-    const apiKey = process.env.AIRTABLE_API_KEY;
-
-    if (!baseId || !tableName || !apiKey) {
-      return res
-        .status(500)
-        .json({ ok: false, error: "Faltan variables de entorno de Airtable (stores)." });
+    if (!baseId || !tableName) {
+      return res.status(200).json({ ok: true, pins: [] });
     }
 
-    const base = new Airtable({ apiKey }).base(baseId);
+    const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(
+      baseId
+    );
 
-    const rows = [];
-    await base(tableName)
-      .select({ pageSize: 200 })
-      .eachPage(
-        (records, next) => {
-          records.forEach((r) => rows.push(r));
-          next();
-        },
-        (err) => {
-          if (err) throw err;
-        }
-      );
+    const rows = await base(tableName)
+      .select({
+        fields: [
+          "UNIDAD",
+          "CALLE",
+          "Exterior",
+          "COLONIA",
+          "CP",
+          "Localidad",
+          "Estado",
+          "DireccionCompuesta", // si ya la tienes como tal
+          "lng",
+          "lat",
+        ],
+        maxRecords: 3000,
+      })
+      .all();
 
-    // Construimos direcciones y geocodificamos
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
     const pins = [];
+
+    // geocoder helper
+    const geocode = async (addr) => {
+      if (!token) return null;
+      const url =
+        "https://api.mapbox.com/geocoding/v5/mapbox.places/" +
+        encodeURIComponent(addr) +
+        `.json?limit=1&language=es&country=mx&access_token=${token}`;
+      const data = await fetch(url).then((r) => r.json());
+      const c = data?.features?.[0]?.center;
+      if (!c) return null;
+      return { lng: c[0], lat: c[1] };
+    };
+
     for (const r of rows) {
-      const name = r.get("UNIDAD") || "Tienda";
-      const address = buildAddress(r);
-      if (!address) continue;
+      const name = r.get("UNIDAD") || r.get("Nombre") || "Tienda";
+      const calle = r.get("CALLE") || "";
+      const ext = r.get("Exterior") || "";
+      const col = r.get("COLONIA") || "";
+      const cp = (r.get("CP") || "").replace(/^CP\./i, "").trim();
+      const loc = r.get("Localidad") || "";
+      const est = r.get("Estado") || "";
+      const comp = r.get("DireccionCompuesta");
+      const address =
+        comp ||
+        `${calle} ${ext}${col ? `, ${col}` : ""}${
+          cp ? `, ${cp}` : ""
+        }${loc ? ` ${loc}` : ""}${est ? `, ${est}` : ""}`.replace(/\s+/g, " ");
 
-      const pos = await geocode(address);
-      if (!pos) continue;
+      let lng = r.get("lng");
+      let lat = r.get("lat");
+      if (!(Number.isFinite(lng) && Number.isFinite(lat))) {
+        const geo = await geocode(address);
+        if (geo) {
+          lng = geo.lng;
+          lat = geo.lat;
+        }
+      }
 
-      pins.push({
-        name,
-        address,
-        lng: pos.lng,
-        lat: pos.lat,
-        color: HEX_PURPLE,
-        source: "stores",
-      });
+      if (Number.isFinite(lng) && Number.isFinite(lat)) {
+        pins.push({
+          name,
+          address,
+          lng,
+          lat,
+          color: "#721390",
+          source: "stores",
+        });
+      }
     }
 
-    res.status(200).json({
-      ok: true,
-      totalRows: rows.length,
-      pinsCount: pins.length,
-      pins,
-    });
+    return res.status(200).json({ ok: true, pins });
   } catch (e) {
-    console.error("static-pins error", e);
-    res.status(500).json({
-      ok: false,
-      error: `static-pins: ${e?.message || e}`,
-    });
+    console.error("pins error", e);
+    return res.status(200).json({ ok: true, pins: [] });
   }
 }
