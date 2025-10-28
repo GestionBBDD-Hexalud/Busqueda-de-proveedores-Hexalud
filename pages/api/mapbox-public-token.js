@@ -1,4 +1,4 @@
-// /pages/api/mapbox-public-token.js
+// pages/api/mapbox-public-token.js
 export default function handler(req, res) {
   try {
     const token = process.env.MAPBOX_TOKEN || "";
